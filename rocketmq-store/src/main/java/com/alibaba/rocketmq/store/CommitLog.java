@@ -572,6 +572,9 @@ public class CommitLog {
                 return new PutMessageResult(PutMessageStatus.UNKNOWN_ERROR, result);
             }
 
+            /**
+             * chen.si:这里的cq 和 tran消息都是异步，在commit log成功后，系统宕机，会导致消息直接丢失
+             */
             DispatchRequest dispatchRequest = new DispatchRequest(//
                 topic,// 1
                 queueId,// 2
