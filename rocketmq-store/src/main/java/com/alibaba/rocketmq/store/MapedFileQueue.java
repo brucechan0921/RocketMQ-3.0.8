@@ -110,7 +110,8 @@ public class MapedFileQueue {
     /**
      * recover时调用，不需要加锁 </br>
      * 
-     * chen.si: offset之后的文件，全部删掉，并且设置最后一个在用文件的writeOffset和commitOffset
+     * chen.si: 1. offset之后的文件，全部删掉
+     * 			2. 并且设置最后一个在用文件的writeOffset和commitOffset（这个功能实际上应该拆分出去，与方法名太不符了）
      * 			此offset实际为 当前queue的最近的一个待写位置
      */
     public void truncateDirtyFiles(long offset) {

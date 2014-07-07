@@ -229,6 +229,10 @@ public class MapedFile extends ReferenceResource {
             byteBuffer.position(currentPos);
             AppendMessageResult result =
                     cb.doAppend(this.getFileFromOffset(), byteBuffer, this.fileSize - currentPos, msg);
+            
+            /**
+             * chen.si: 提升当前文件的待写位置
+             */
             this.wrotePostion.addAndGet(result.getWroteBytes());
             this.storeTimestamp = result.getStoreTimestamp();
             return result;
@@ -340,8 +344,14 @@ public class MapedFile extends ReferenceResource {
         if ((pos + size) <= this.wrotePostion.get()) {
             // 从MapedBuffer读
             if (this.hold()) {
+            	/**
+            	 * chen.si: slice出来的buffer，可供外部操作
+            	 */
                 ByteBuffer byteBuffer = this.mappedByteBuffer.slice();
                 byteBuffer.position(pos);
+                /**
+                 * chen.si 再次slice得到byteBufferNew：pos=0
+                 */
                 ByteBuffer byteBufferNew = byteBuffer.slice();
                 byteBufferNew.limit(size);
                 return new SelectMapedBufferResult(this.fileFromOffset + pos, byteBufferNew, size, this);
@@ -413,10 +423,16 @@ public class MapedFile extends ReferenceResource {
      * @return 是否被destory成功，上层调用需要对失败情况处理，失败后尝试重试
      */
     public boolean destroy(final long intervalForcibly) {
+    	/**
+    	 * chen.si shutdown内部会调用cleanup，通过munmap来释放文件的内存映射
+    	 */
         this.shutdown(intervalForcibly);
 
         if (this.isCleanupOver()) {
             try {
+            	/**
+            	 * chen.si 关闭fd
+            	 */
                 this.fileChannel.close();
                 log.info("close file channel " + this.fileName + " OK");
 
