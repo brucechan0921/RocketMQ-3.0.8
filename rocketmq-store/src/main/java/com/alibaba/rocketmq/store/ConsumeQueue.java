@@ -96,9 +96,9 @@ public class ConsumeQueue {
             int mapedFileSizeLogics = this.mapedFileSize;
             MapedFile mapedFile = mapedFiles.get(index);
             ByteBuffer byteBuffer = mapedFile.sliceByteBuffer();
-            //cs：global offset
+            //chen.si global offset
             long processOffset = mapedFile.getFileFromOffset();
-            //cs：local offset
+            //chen.si local offset
             long mapedFileOffset = 0;
             while (true) {
                 for (int i = 0; i < mapedFileSizeLogics; i += CQStoreUnitSize) {
@@ -115,14 +115,14 @@ public class ConsumeQueue {
                         this.maxPhysicOffset = offset;
                     }
                     else {
-                    	//cs：文件到了最后一条消息，结束这个文件
+                    	//chen.si 文件到了最后一条消息，结束这个文件
                         log.info("recover current consume queue file over,  " + mapedFile.getFileName() + " "
                                 + offset + " " + size + " " + tagsCode);
                         break;
                     }
                 }
 
-                //cs：只能通过local offset 和  文件满期望的 大小 来 判断  文件是否满（commit log有单独的结束标识）
+                //chen.si 只能通过local offset 和  文件满期望的 大小 来 判断  文件是否满（commit log有单独的结束标识）
                 // 走到文件末尾，切换至下一个文件
                 if (mapedFileOffset == mapedFileSizeLogics) {
                     index++;
@@ -163,6 +163,16 @@ public class ConsumeQueue {
             // low:第一个索引信息的起始位置
             // minLogicOffset有设置值则从
             // minLogicOffset-mapedFile.getFileFromOffset()位置开始才是有效值
+            /**
+             * chen.si: 索引文件中，之前提到过，为了避免逻辑顺序错误，增加了在文件开始填充 特殊20字节，来调整 保证 索引消息位置 符合 实际位置
+             * 
+             * 		    所以文件开始X字节，可能不是真实的索引消息， 需要跳到第1条真实的消息：minLogicOffset-mapedFile.getFileFromOffset()
+             * 
+             * 		 其中，minLogicOffset是 位置的实际偏移字节量
+             */
+            /**
+             * chen.si low为相对于文件的起始的local offset（字节偏移）
+             */
             int low =
                     minLogicOffset > mapedFile.getFileFromOffset() ? (int) (minLogicOffset - mapedFile
                         .getFileFromOffset()) : 0;
@@ -176,15 +186,24 @@ public class ConsumeQueue {
             SelectMapedBufferResult sbr = mapedFile.selectMapedBuffer(0);
             if (null != sbr) {
                 ByteBuffer byteBuffer = sbr.getByteBuffer();
+                /**
+                 * chen.si 最后一个索引消息的 起始 字节位置， 所以 减去 20
+                 */
                 high = byteBuffer.limit() - CQStoreUnitSize;
                 try {
                     while (high >= low) {
+                    	/**
+                    	 * chen.si binary search  二分查找的基础： 索引文件中的消息，是按照store timestamp时间排序的
+                    	 */
                         midOffset = (low + high) / (2 * CQStoreUnitSize) * CQStoreUnitSize;
                         byteBuffer.position(midOffset);
                         long phyOffset = byteBuffer.getLong();
                         int size = byteBuffer.getInt();
 
                         // 比较时间, 折半
+                        /**
+                         * chen.si 根据索引消息的commit phy offset和size字段，在commit log中找到这条消息的store timestamp信息
+                         */
                         long storeTime =
                                 this.defaultMessageStore.getCommitLog().pickupStoretimestamp(phyOffset, size);
                         if (storeTime < 0) {
@@ -192,15 +211,24 @@ public class ConsumeQueue {
                             return 0;
                         }
                         else if (storeTime == timestamp) {
+                        	/**
+                        	 * chen.si 正好找到，查找结束，直接break掉
+                        	 */
                             targetOffset = midOffset;
                             break;
                         }
                         else if (storeTime > timestamp) {
+                        	/**
+                        	 * chen.si 找到了 大 的值，记下来。 再在 左边 binary search
+                        	 */
                             high = midOffset - CQStoreUnitSize;
                             rightOffset = midOffset;
                             rightIndexValue = storeTime;
                         }
                         else {
+                        	/**
+                        	 * chen.si 找到了 小 的值，记下来。 再在 右边 binary search
+                        	 */
                             low = midOffset + CQStoreUnitSize;
                             leftOffset = midOffset;
                             leftIndexValue = storeTime;
@@ -208,6 +236,9 @@ public class ConsumeQueue {
                     }
 
                     if (targetOffset != -1) {
+                    	/**
+                    	 * chen.si 找到了 相等的，之前break出来的
+                    	 */
                         // 查询的时间正好是消息索引记录写入的时间
                         offset = targetOffset;
                     }
@@ -245,6 +276,9 @@ public class ConsumeQueue {
      * 根据物理Offset删除无效逻辑文件
      */
     public void truncateDirtyLogicFiles(long phyOffet) {
+    	/**
+    	 * chen.si phyOffset是最大offset，基于这个offset，将多余的文件删除掉
+    	 */
         // 逻辑队列每个文件大小
         int logicFileSize = this.mapedFileSize;
 
@@ -266,11 +300,17 @@ public class ConsumeQueue {
 
                     // 逻辑文件起始单元
                     if (0 == i) {
+                    	/**
+                    	 * chen.si 索引文件内的第1个索引消息对应的phy offset 大于等于 传入的offset，所以直接删除掉该文件
+                    	 */
                         if (offset >= phyOffet) {
                             this.mapedFileQueue.deleteLastMapedFile();
                             break;
                         }
                         else {
+                        	/**
+                        	 * chen.si phy offset符合条件，因此修改 相关参数
+                        	 */
                             int pos = i + CQStoreUnitSize;
                             mapedFile.setWrotePostion(pos);
                             mapedFile.setCommittedPosition(pos);
@@ -459,20 +499,50 @@ public class ConsumeQueue {
         MapedFile mapedFile = this.mapedFileQueue.getLastMapedFile(realLogicOffset);
         if (mapedFile != null) {
             // 纠正MapedFile逻辑队列索引顺序
+        	/**
+        	 * chen.si 所谓的逻辑队列索引顺序，比较难理解，参考如下2点：
+        	 * 			1. cq中的消息是固定的20字节，所以 第几条消息在cq的位置中是固定的
+
+						比如：第1条消息，是：0-20字节的位置；第2条消息，是：20-40字节的位置；第N条消息，是：(N-1)*20 - N*20
+						
+						2.  这里是假设： cq中即将写入的消息偏移（即：第几条消息）  与  当前cq文件的待写入 位置 不匹配
+						
+						所以认为是索引顺序有错误，进行调整，方法为：使用特殊的20字节进行填充文件开始部分，以修改cq文件的待写入位置。这里的前提是： 消息偏移 的 期望位置  比 当前位置 要小。 
+        	 */
             if (mapedFile.isFirstCreateInQueue() && cqOffset != 0 && mapedFile.getWrotePostion() == 0) {
+            	/**
+            	 * chen.si 符合条件：
+            	 * mapedFile.isFirstCreateInQueue()  当前file queue的第1个文件
+            	 * cqOffset != 0				             消息在filequeue中的offset不是0，也就是说 不是系统的第1条消息
+            	 * mapedFile.getWrotePostion() == 0	   当前file创建后的第1次 写
+            	 */
+            	
+            	/**
+            	 * chen.si 设置当前在写文件的初始消息的real logic offset
+            	 */
                 this.minLogicOffset = realLogicOffset;
+                
+                /**
+                 * chen.si 根据逻辑计算，找到realLogicOffset在当前文件中的实际位置。 将文件开始 到 实际位置 之间，用 特殊的20字节填充提升 wrote position
+                 */
                 this.fillPreBlank(mapedFile, realLogicOffset);
                 log.info("fill pre blank space " + mapedFile.getFileName() + " " + realLogicOffset + " "
                         + mapedFile.getWrotePostion());
             }
 
             if (cqOffset != 0) {
+            	/**
+            	 * chen.si 尽管调整了，但是仍然存在  逻辑队列索引顺序问题。 比如 realLogicOffset滞后。此时只能告警
+            	 */
                 if (realLogicOffset != (mapedFile.getWrotePostion() + mapedFile.getFileFromOffset())) {
                     log.warn("logic queue order maybe wrong " + realLogicOffset + " "
                             + (mapedFile.getWrotePostion() + mapedFile.getFileFromOffset()));
                 }
             }
 
+            /**
+             * chen.si 每次存储新消息，都更新maxPhysicOffset，也就是cq中对应commit log中的最大offset
+             */
             // 记录物理队列最大offset
             this.maxPhysicOffset = offset;
             return mapedFile.appendMessage(this.byteBufferIndex.array());

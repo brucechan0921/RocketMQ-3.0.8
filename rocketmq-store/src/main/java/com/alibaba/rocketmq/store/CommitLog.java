@@ -1001,6 +1001,10 @@ public class CommitLog {
              * 生成消息ID STORETIMESTAMP + STOREHOSTADDRESS + OFFSET <br>
              */
             MessageExtBrokerInner msgInner = (MessageExtBrokerInner) msg;
+            /**
+             * chen.si 这里单独传参fileFromOffset，理解不了用意。
+             * 			 对于commit log来说，只负责持久化消息，它面向的应该是 一个 buffer，以及  标识当前位置的global offset 
+             */
             // PHY OFFSET
             long wroteOffset = fileFromOffset + byteBuffer.position();
             String msgId =

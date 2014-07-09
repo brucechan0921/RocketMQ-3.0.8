@@ -165,6 +165,10 @@ public class MessageStoreConfig {
 
 
     public int getMapedFileSizeConsumeQueue() {
+    	/**
+    	 * chen.si cq中存放固定大小的消息，所以修正cq的file size，为 固定大小的整数倍
+    	 * 			这样的好处是： 最终只要判断文件是否写满，即可跳转到下一个文件（commit log是通过特殊的 结尾消息 来标识的）
+    	 */
         // 此处需要向上取整
         int factor = (int) Math.ceil(this.mapedFileSizeConsumeQueue / (ConsumeQueue.CQStoreUnitSize * 1.0));
         return (int) (factor * ConsumeQueue.CQStoreUnitSize);

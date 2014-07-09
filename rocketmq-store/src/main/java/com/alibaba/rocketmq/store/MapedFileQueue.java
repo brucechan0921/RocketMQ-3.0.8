@@ -258,15 +258,24 @@ public class MapedFileQueue {
         MapedFile mapedFileLast = null;
         {
             this.readWriteLock.readLock().lock();
+            /**
+             * chen.si 如果没有文件，则计算出第1个文件的起始global offset，用来创建新文件
+             */
             if (this.mapedFiles.isEmpty()) {
                 createOffset = startOffset - (startOffset % this.mapedFileSize);
             }
             else {
+            	/**
+            	 * chen.si 直接获取最后一个元素
+            	 */
                 mapedFileLast = this.mapedFiles.get(this.mapedFiles.size() - 1);
             }
             this.readWriteLock.readLock().unlock();
         }
 
+        /**
+         * chen.si 最后一个文件满了，则自动扩展到下一个文件，计算出下一个文件的起始global offset
+         */
         if (mapedFileLast != null && mapedFileLast.isFull()) {
             createOffset = mapedFileLast.getFileFromOffset() + this.mapedFileSize;
         }
@@ -279,12 +288,18 @@ public class MapedFileQueue {
             MapedFile mapedFile = null;
 
             if (this.allocateMapedFileService != null) {
+            	/**
+            	 * chen.si 异步分配 以及 预分配下一个文件
+            	 */
                 mapedFile =
                         this.allocateMapedFileService.putRequestAndReturnMapedFile(nextFilePath,
                             nextNextFilePath, this.mapedFileSize);
             }
             else {
                 try {
+                	/**
+                	 * chen.si 直接创建文件
+                	 */
                     mapedFile = new MapedFile(nextFilePath, this.mapedFileSize);
                 }
                 catch (IOException e) {
