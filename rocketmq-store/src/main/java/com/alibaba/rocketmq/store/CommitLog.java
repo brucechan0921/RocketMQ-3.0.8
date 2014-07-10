@@ -49,8 +49,14 @@ import com.alibaba.rocketmq.store.schedule.ScheduleMessageService;
 public class CommitLog {
     private static final Logger log = LoggerFactory.getLogger(LoggerName.StoreLoggerName);
     // 每个消息对应的MAGIC CODE daa320a7
+    /**
+     * chen.si 标识commit log的普通消息
+     */
     private final static int MessageMagicCode = 0xAABBCCDD ^ 1880681586 + 8;
     // 文件末尾空洞对应的MAGIC CODE cbd43194
+    /**
+     * chen.si 标识commit log的文件末尾
+     */
     private final static int BlankMagicCode = 0xBBCCDDEE ^ 1880681586 + 8;
     // 存储消息的队列
     private final MapedFileQueue mapedFileQueue;
@@ -69,12 +75,18 @@ public class CommitLog {
      * 构造函数
      */
     public CommitLog(final DefaultMessageStore defaultMessageStore) {
+    	/**
+    	 * chen.si 初始化
+    	 */
         this.mapedFileQueue =
                 new MapedFileQueue(defaultMessageStore.getMessageStoreConfig().getStorePathCommitLog(),
                     defaultMessageStore.getMessageStoreConfig().getMapedFileSizeCommitLog(),
                     defaultMessageStore.getAllocateMapedFileService());
         this.defaultMessageStore = defaultMessageStore;
 
+        /**
+         * chen.si 刷盘类型，可配置
+         */
         if (FlushDiskType.SYNC_FLUSH == defaultMessageStore.getMessageStoreConfig().getFlushDiskType()) {
             this.flushCommitLogService = new GroupCommitService();
         }

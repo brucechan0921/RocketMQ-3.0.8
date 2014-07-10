@@ -52,6 +52,14 @@ public class ConsumeQueue {
     private long maxPhysicOffset = -1;
     // 逻辑队列的最小Offset，删除物理文件时，计算出来的最小Offset
     // 实际使用需要除以 StoreUnitSize
+    /**
+     * chen.si 此队列的最小字节offset，实际上就是 第1个mapped file的第1个有效消息的global offset（第1个文件可能被特殊20字节填充的，所以是第1条有效消息）
+     * 	       一般情况下就是第1个mapped file的fileoffset
+     * 
+     * 实际上是标识 索引队列 的1条有效消息，那说明存在无效消息，无效消息有2种：
+     * 1. 填充的 特殊20字节 的消息（索引消息逻辑错乱导致）
+     * 2. 对应的物理消息（即：commit log）已经被删除
+     */
     private volatile long minLogicOffset = 0;
 
 
@@ -79,6 +87,9 @@ public class ConsumeQueue {
 
 
     public boolean load() {
+    	/**
+    	 * chen.si 加载 <topic><queueid>下的 maped files
+    	 */
         boolean result = this.mapedFileQueue.load();
         log.info("load consume queue " + this.topic + "-" + this.queueId + " " + (result ? "OK" : "Failed"));
         return result;
@@ -88,6 +99,9 @@ public class ConsumeQueue {
     public void recover() {
         final List<MapedFile> mapedFiles = this.mapedFileQueue.getMapedFiles();
         if (!mapedFiles.isEmpty()) {
+        	/**
+        	 * chen.si 老样子，从倒数第3个开始恢复
+        	 */
             // 从倒数第三个文件开始恢复
             int index = mapedFiles.size() - 3;
             if (index < 0)
@@ -109,9 +123,9 @@ public class ConsumeQueue {
                     // 说明当前存储单元有效
                     // TODO 这样判断有效是否合理？
                     if (offset >= 0 && size > 0) {
-                    	//cs：看是否到了最后一条消息
+                    	//chen.si 看是否到了最后一条消息
                         mapedFileOffset = i + CQStoreUnitSize;
-                        //cs：cq的消息在commit log的最大offset
+                        //chen.si cq的消息在commit log的最大offset
                         this.maxPhysicOffset = offset;
                     }
                     else {
@@ -122,10 +136,16 @@ public class ConsumeQueue {
                     }
                 }
 
-                //chen.si 只能通过local offset 和  文件满期望的 大小 来 判断  文件是否满（commit log有单独的结束标识）
+                /**
+                 * chen.si 只能通过local offset 和  文件满期望的 大小 来 判断  文件是否满（commit log有单独的结束标识）
+                 * 			说明这个文件是因为文件满才结束的，需要继续恢复下一个文件（如果有的话）
+                 */
                 // 走到文件末尾，切换至下一个文件
                 if (mapedFileOffset == mapedFileSizeLogics) {
                     index++;
+                    /**
+                     * chen.si 如果只有1个full的文件，还是会走到这段逻辑的吧？
+                     */
                     if (index >= mapedFiles.size()) {
                         // 当前条件分支不可能发生
                         log.info("recover last consume queue file over, last maped file "
@@ -133,6 +153,9 @@ public class ConsumeQueue {
                         break;
                     }
                     else {
+                    	/**
+                    	 * chen.si 准备下一个文件
+                    	 */
                         mapedFile = mapedFiles.get(index);
                         byteBuffer = mapedFile.sliceByteBuffer();
                         processOffset = mapedFile.getFileFromOffset();
@@ -148,6 +171,9 @@ public class ConsumeQueue {
             }
 
             processOffset += mapedFileOffset;
+            /**
+             * chen.si 为什么没有设置committedWhere？
+             */
             this.mapedFileQueue.truncateDirtyFiles(processOffset);
         }
     }
@@ -172,6 +198,11 @@ public class ConsumeQueue {
              */
             /**
              * chen.si low为相对于文件的起始的local offset（字节偏移）
+             * 
+             * 目的： 找到当前maped file的第1条有效消息的位置
+             * 
+             * 如果minLogicOffset > mapedFile.getFileFromOffset()， 说明 这个mapedFile的刚开始部分存在 特殊20字节，所以需要去掉，不能从0计算有效消息。 
+             * 其实也就是说，当前这个文件是queue的第1个文件。 否则的话，说明 这个mapedfile 不是第1个文件，就不需要考虑minLogicOffset
              */
             int low =
                     minLogicOffset > mapedFile.getFileFromOffset() ? (int) (minLogicOffset - mapedFile
@@ -277,12 +308,15 @@ public class ConsumeQueue {
      */
     public void truncateDirtyLogicFiles(long phyOffet) {
     	/**
-    	 * chen.si phyOffset是最大offset，基于这个offset，将多余的文件删除掉
+    	 * chen.si phyOffset是最大commit log offset，基于这个offset，将多余的文件删除掉
     	 */
         // 逻辑队列每个文件大小
         int logicFileSize = this.mapedFileSize;
 
         // 先改变逻辑队列存储的物理Offset
+        /**
+         * chen.si 暂时不理解这里的目的
+         */
         this.maxPhysicOffset = phyOffet - 1;
 
         while (true) {
@@ -301,6 +335,9 @@ public class ConsumeQueue {
                     // 逻辑文件起始单元
                     if (0 == i) {
                     	/**
+                    	 * chen.si 0 == i的判断，是因为 存在  删除这个文件 的可能性
+                    	 */
+                    	/**
                     	 * chen.si 索引文件内的第1个索引消息对应的phy offset 大于等于 传入的offset，所以直接删除掉该文件
                     	 */
                         if (offset >= phyOffet) {
@@ -309,7 +346,7 @@ public class ConsumeQueue {
                         }
                         else {
                         	/**
-                        	 * chen.si phy offset符合条件，因此修改 相关参数
+                        	 * chen.si phy offset符合条件，因此设置 相关参数
                         	 */
                             int pos = i + CQStoreUnitSize;
                             mapedFile.setWrotePostion(pos);
@@ -322,6 +359,11 @@ public class ConsumeQueue {
                         // 说明当前存储单元有效
                         if (offset >= 0 && size > 0) {
                             // 如果逻辑队列存储的最大物理offset大于物理队列最大offset，则返回
+                        	/**
+                        	 * chen.si 不清理掉这种无效的消息？ 
+                        	 * 
+                        	 * 		   --即使设置了wrote pos 和 comit pos，后续写会覆盖消息，但是如果立刻正常关闭，又会如何
+                        	 */
                             if (offset >= phyOffet) {
                                 return;
                             }
@@ -337,6 +379,9 @@ public class ConsumeQueue {
                             }
                         }
                         else {
+                        	/**
+                        	 * chen.si 到了该文件的最后一条消息
+                        	 */
                             return;
                         }
                     }
@@ -351,6 +396,8 @@ public class ConsumeQueue {
 
     /**
      * 返回最后一条消息对应物理队列的Next Offset
+     * 
+     * chen.si 这个方法不可靠。 commit log是全局的，单从一个cq就推断出下一个 commitlog的位置，有问题。 不过没有找到 使用这个方法 的地方
      */
     public long getLastOffset() {
         // 物理队列Offset
@@ -395,9 +442,19 @@ public class ConsumeQueue {
 
 
     public int deleteExpiredFile(long offset) {
+    	/**
+    	 * chen.si 传入的offset是commit log的最小offset
+    	 */
         int cnt = this.mapedFileQueue.deleteExpiredFileByOffset(offset, CQStoreUnitSize);
         // 无论是否删除文件，都需要纠正下最小值，因为有可能物理文件删除了，
         // 但是逻辑文件一个也删除不了
+        /**
+         * chen.si 2种情况，会导致minLogicOffset发生变化：
+         * 
+         * 1. 索引队列头 对应的几个文件，被删除掉
+         * 
+         * 2. 物理文件(commit log)被删除掉了，但是 索引文件 没删除掉。 为了保证有效性，同样需要correct
+         */
         this.correctMinOffset(offset);
         return cnt;
     }
@@ -418,6 +475,13 @@ public class ConsumeQueue {
                         result.getByteBuffer().getInt();
                         result.getByteBuffer().getLong();
 
+                        /**
+                         * 目的： 保证索引队列的有效性（部分头消息已经是无效的，因为commit log被删除）
+                         * 
+                         * 基础：minLogicOffset 标识 索引队列的第1个有效消息
+                         * 
+                         * 因为commit log被删除了，所以 索引文件中 开始的部分索引消息 已经是 无效的了， 所以调整minLogicOffset，直到有效
+                         */
                         if (offsetPy >= phyMinOffset) {
                             this.minLogicOffset = result.getMapedFile().getFileFromOffset() + i;
                             log.info("compute logics min offset: " + this.getMinOffsetInQuque() + ", topic: "
@@ -447,8 +511,14 @@ public class ConsumeQueue {
         final int MaxRetries = 5;
         boolean canWrite = this.defaultMessageStore.getRunningFlags().isWriteable();
         for (int i = 0; i < MaxRetries && canWrite; i++) {
+        	/**
+        	 * chen.si 存储索引消息
+        	 */
             boolean result = this.putMessagePostionInfo(offset, size, tagsCode, logicOffset);
             if (result) {
+            	/**
+            	 * chen.si 设置checkpoint
+            	 */
                 this.defaultMessageStore.getStoreCheckpoint().setLogicsMsgTimestamp(storeTimestamp);
                 return;
             }
@@ -472,6 +542,12 @@ public class ConsumeQueue {
 
     /**
      * 存储一个20字节的信息，putMessagePostionInfo只有一个线程调用，所以不需要加锁
+     * 
+     * chen.si:  
+     * 
+     * 			1. 存储索引消息
+     * 			2. 调整潜在minlogicoffset
+     * 			3. 更新maxPhyOffset
      * 
      * @param offset
      *            消息对应的CommitLog offset
@@ -584,6 +660,12 @@ public class ConsumeQueue {
     }
 
 
+    /**
+     * chen.si 暂时未知，后续补充
+     * 
+     * @param index
+     * @return
+     */
     public long rollNextFile(final long index) {
         int mapedFileSize = this.mapedFileSize;
         int totalUnitsInFile = mapedFileSize / CQStoreUnitSize;

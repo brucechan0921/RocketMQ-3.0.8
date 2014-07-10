@@ -75,6 +75,9 @@ public class MapedFileQueue {
         if (null == mfs)
             return null;
 
+        /**
+         * chen.si 从最小的0号开始找
+         */
         for (int i = 0; i < mfs.length; i++) {
             MapedFile mapedFile = (MapedFile) mfs[i];
             if (mapedFile.getLastModifiedTimestamp() >= timestamp) {
@@ -441,6 +444,9 @@ public class MapedFileQueue {
     public int deleteExpiredFileByOffset(long offset, int unitSize) {
         Object[] mfs = this.copyMapedFiles(0);
 
+        /**
+         * chen.si 这里的offset，是数据文件（commit log）的第1个消息的phy offset
+         */
         List<MapedFile> files = new ArrayList<MapedFile>();
         int deleteCount = 0;
         if (null != mfs) {
@@ -453,6 +459,11 @@ public class MapedFileQueue {
                 MapedFile mapedFile = (MapedFile) mfs[i];
                 SelectMapedBufferResult result = mapedFile.selectMapedBuffer(this.mapedFileSize - unitSize);
                 if (result != null) {
+                	/**
+                	 * chen.si 找到最后一条消息，其offset肯定是最大的 。如果最大的都比 传入的offset 小，则这个索引文件已经没用了，可以删掉了。
+                	 * 
+                	 * 如果最大的 比 传入的offset 大， 说明这个文件还有有效消息，不能删
+                	 */
                     long maxOffsetInLogicQueue = result.getByteBuffer().getLong();
                     result.release();
                     // 当前文件是否可以删除
