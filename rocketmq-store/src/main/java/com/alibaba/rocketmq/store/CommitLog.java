@@ -76,7 +76,7 @@ public class CommitLog {
      */
     public CommitLog(final DefaultMessageStore defaultMessageStore) {
     	/**
-    	 * chen.si 初始化
+    	 * chen.si 初始化存储数据消息的抽象队列
     	 */
         this.mapedFileQueue =
                 new MapedFileQueue(defaultMessageStore.getMessageStoreConfig().getStorePathCommitLog(),
@@ -107,11 +107,16 @@ public class CommitLog {
     }
 
 
+    /**
+     * chen.si 启动刷盘服务
+     */
     public void start() {
         this.flushCommitLogService.start();
     }
 
-
+    /**
+     * chen.si 关闭刷盘服务
+     */
     public void shutdown() {
         this.flushCommitLogService.shutdown();
     }
@@ -120,10 +125,16 @@ public class CommitLog {
     public long getMinOffset() {
         MapedFile mapedFile = this.mapedFileQueue.getFirstMapedFileOnLock();
         if (mapedFile != null) {
+        	/**
+        	 * chen.si TODO
+        	 */
             if (mapedFile.isAvailable()) {
                 return mapedFile.getFileFromOffset();
             }
             else {
+            	/**
+            	 * chen.si 找到下一个文件的offset
+            	 */
                 return this.rollNextFile(mapedFile.getFileFromOffset());
             }
         }
@@ -132,17 +143,35 @@ public class CommitLog {
     }
 
 
+    /**
+     * chen.si 找到当前offset对应的下一个文件，返回下一个文件的起始offset
+     * @param offset
+     * @return
+     */
     public long rollNextFile(final long offset) {
         int mapedFileSize = this.defaultMessageStore.getMessageStoreConfig().getMapedFileSizeCommitLog();
         return (offset + mapedFileSize - offset % mapedFileSize);
     }
 
 
+    /**
+     * chen.si 获取commit log的最大的offset，即：队列尾的offset
+     * @return
+     */
     public long getMaxOffset() {
         return this.mapedFileQueue.getMaxOffset();
     }
 
 
+    /**
+     * chen.si 用于 commit log文件的自动清理服务， 消息最多保留N天，超过N天的，必须删除掉，判断依据为file的元数据 最近修改时间戳
+     * 
+     * @param expiredTime
+     * @param deleteFilesInterval
+     * @param intervalForcibly
+     * @param cleanImmediately
+     * @return
+     */
     public int deleteExpiredFile(//
             final long expiredTime, //
             final int deleteFilesInterval, //
@@ -158,6 +187,9 @@ public class CommitLog {
      * 读取CommitLog数据，数据复制时使用
      */
     public SelectMapedBufferResult getData(final long offset) {
+    	/**
+    	 * chen.si  用0 表示 queue的第1个文件
+    	 */
         return this.getData(offset, (0 == offset ? true : false));
     }
 
@@ -191,9 +223,9 @@ public class CommitLog {
         boolean checkCRCOnRecover = this.defaultMessageStore.getMessageStoreConfig().isCheckCRCOnRecover();
         final List<MapedFile> mapedFiles = this.mapedFileQueue.getMapedFiles();
         if (!mapedFiles.isEmpty()) {
-        	/*
+        	/**
         	 * chen.si:正常情况下，3个文件足够恢复了。也就是说，最后一个可写文件一般就在这3个文件中
-        	 * */
+        	 */
             // 从倒数第三个文件开始恢复
             int index = mapedFiles.size() - 3;
             if (index < 0)
@@ -201,9 +233,13 @@ public class CommitLog {
 
             MapedFile mapedFile = mapedFiles.get(index);
             ByteBuffer byteBuffer = mapedFile.sliceByteBuffer();
-            //chen.si：这个是个global offset，指示最后一条消息
+            /**
+             * chen.si：这个是个global offset，指示最后一条消息
+             */
             long processOffset = mapedFile.getFileFromOffset();
-            //chen.si:当前文件内的offset
+            /**
+             * chen.si:当前文件内的offset
+             */
             long mapedFileOffset = 0;
             while (true) {
                 DispatchRequest dispatchRequest =
@@ -211,11 +247,15 @@ public class CommitLog {
                 int size = dispatchRequest.getMsgSize();
                 // 正常数据
                 if (size > 0) {
-                	/*chen.si:累加当前文件的消息offset(local offset  另外一个称为global offset)*/
+                	/**
+                	 * chen.si:累加当前文件的消息offset(local offset  另外一个称为global offset)
+                	 */
                     mapedFileOffset += size;
                 }
                 // 文件中间读到错误
-                // chen.si：文件未写完而已，并不是错误。此时直接break，因为这个文件就是最后一个待用文件
+                /**
+                 * chen.si：文件未写完而已，并不是错误。此时直接break，因为这个文件就是最后一个待用文件
+                 */
                 else if (size == -1) {
                     log.info("recover physics file end, " + mapedFile.getFileName());
                     break;
@@ -223,7 +263,9 @@ public class CommitLog {
                 // 走到文件末尾，切换至下一个文件
                 // 由于返回0代表是遇到了最后的空洞，这个可以不计入truncate offset中
                 else if (size == 0) {
-                	//chen.si：遇到了空洞文件末尾，切换到下一个文件
+                	/**
+                	 * chen.si：遇到了空洞文件末尾，切换到下一个文件
+                	 */
                     index++;
                     if (index >= mapedFiles.size()) {
                         // 当前条件分支不可能发生
@@ -234,9 +276,13 @@ public class CommitLog {
                     else {
                         mapedFile = mapedFiles.get(index);
                         byteBuffer = mapedFile.sliceByteBuffer();
-                        //chen.si:每个map file的起始global offset，
+                        /**
+                         * chen.si:每个map file的起始global offset，
+                         */
                         processOffset = mapedFile.getFileFromOffset();
-                        //chen.si:localoffset
+                        /**
+                         * chen.si:localoffset
+                         */
                         mapedFileOffset = 0;
                         log.info("recover next physics file, " + mapedFile.getFileName());
                     }
@@ -280,7 +326,9 @@ public class CommitLog {
             case BlankMagicCode:
                 return new DispatchRequest(0);
             default:
-            	//chensi：找到了最后一条消息，并且文件未写完，仍然可写。所以这里是一个常态，非异常
+            	/**
+            	 * chen.si：找到了最后一条消息，并且文件未写完，仍然可写。所以这里是一个常态，非异常
+            	 */
                 log.warn("found a illegal magic code 0x" + Integer.toHexString(magicCode));
                 return new DispatchRequest(-1);
             }
@@ -404,10 +452,24 @@ public class CommitLog {
             MapedFile mapedFile = null;
             for (; index >= 0; index--) {
                 mapedFile = mapedFiles.get(index);
+                /**
+                 * chen.si 不是恢复所有文件checkpoint
+                 */
                 if (this.isMapedFileMatchedRecover(mapedFile)) {
+                	
+                	// 考虑 store时间戳的误差，所以从上一个文件进行恢复，防止消息丢失
+                	// TODO 最准确的方式是直接找到上一个文件的checkpoint对应的点，然后恢复剩余的消息，避免恢复整个文件。
+                	//      但是commit log需要从头寻找才能确定消息，而且都要走一遍page cache，性能相差基本不大
+                	if(index > 0) {
+                		mapedFile = mapedFiles.get(index - 1);
+                	}
+                	
                     log.info("recover from this maped file " + mapedFile.getFileName());
                     break;
                 }
+                /**
+                 * chen.si 走到这里，说明 需要找 再之前的文件， 进行恢复
+                 */
             }
 
             if (index < 0) {
@@ -419,12 +481,20 @@ public class CommitLog {
             long processOffset = mapedFile.getFileFromOffset();
             long mapedFileOffset = 0;
             while (true) {
+            	/**
+            	 * chen.si 深入看checkMessageAndReturnSize方法，会发现最后DispatchRequest的producerGroup为null
+            	 * 
+            	 * 这是因为：关于事务消息 的恢复，有单独的恢复流程，直接根据cq来恢复
+            	 */
                 DispatchRequest dispatchRequest =
                         this.checkMessageAndReturnSize(byteBuffer, checkCRCOnRecover);
                 int size = dispatchRequest.getMsgSize();
                 // 正常数据
                 if (size > 0) {
                     mapedFileOffset += size;
+                    /**
+                     * chen.si 关键点，重放 commit log的消息 到 cq中， cq会选择是 因为已经建立索引消息而忽略， 或者 补偿建立索引消息
+                     */
                     this.defaultMessageStore.putDispatchRequest(dispatchRequest);
                 }
                 // 文件中间读到错误
@@ -456,10 +526,21 @@ public class CommitLog {
             this.mapedFileQueue.truncateDirtyFiles(processOffset);
 
             // 清除ConsumeQueue的多余数据
+            /**
+             * chen.si TODO 不知道什么场景会产生如下情况：
+             * 
+             * cq的索引消息中存在多余消息，其 对应的 数据消息 在 commit log中不存在。 
+             * 
+             * 这个是以文件为级别的，发现中的第1条消息是多余消息，则删掉整个文件。
+             * 如果文件中 开始一部分消息合法，但是 后续消息不合法呢？cq.truncateDirtyLogicFiles方法中没看到处理逻辑，却是直接return的
+             */
             this.defaultMessageStore.truncateDirtyLogicFiles(processOffset);
         }
         // 物理文件都被删除情况下
         else {
+        	/**
+        	 * chen.si 直接重置cq
+        	 */
             this.mapedFileQueue.setCommittedWhere(0);
             this.defaultMessageStore.destroyLogics();
         }
@@ -469,16 +550,25 @@ public class CommitLog {
     private boolean isMapedFileMatchedRecover(final MapedFile mapedFile) {
         ByteBuffer byteBuffer = mapedFile.sliceByteBuffer();
 
+        /**
+         * chen.si 找第1个物理消息
+         */
         int magicCode = byteBuffer.getInt(MessageDecoder.MessageMagicCodePostion);
         if (magicCode != MessageMagicCode) {
             return false;
         }
 
+        /**
+         * chen.si 获取第1个物理消息的存储时间
+         */
         long storeTimestamp = byteBuffer.getLong(MessageDecoder.MessageStoreTimestampPostion);
         if (0 == storeTimestamp) {
             return false;
         }
 
+        /**
+         * chen.si 带上 index queue的 时间 来比较
+         */
         if (this.defaultMessageStore.getMessageStoreConfig().isMessageIndexEnable()//
                 && this.defaultMessageStore.getMessageStoreConfig().isMessageIndexSafe()) {
             if (storeTimestamp <= this.defaultMessageStore.getStoreCheckpoint().getMinTimestampIndex()) {
@@ -489,6 +579,9 @@ public class CommitLog {
             }
         }
         else {
+        	/**
+        	 * chen.si 直接比较  commit queue 和 cq 的时间  
+        	 */
             if (storeTimestamp <= this.defaultMessageStore.getStoreCheckpoint().getMinTimestamp()) {
                 log.info("find check timestamp, {} {}", //
                     storeTimestamp,//
@@ -502,6 +595,9 @@ public class CommitLog {
 
 
     public PutMessageResult putMessage(final MessageExtBrokerInner msg) {
+    	/**
+    	 * chen.si 真正存储消息的入口
+    	 */
         // 设置存储时间
         msg.setStoreTimestamp(System.currentTimeMillis());
         // 设置消息体BODY CRC（考虑在客户端设置最合适）
@@ -518,6 +614,9 @@ public class CommitLog {
         final int tranType = MessageSysFlag.getTransactionValue(msg.getSysFlag());
         if (tranType == MessageSysFlag.TransactionNotType//
                 || tranType == MessageSysFlag.TransactionCommitType) {
+        	/**
+        	 * chen.si 对于普通消息 和 commit消息，需要考虑 延迟发送 功能
+        	 */
             // 延时投递
             if (msg.getDelayTimeLevel() > 0) {
                 if (msg.getDelayTimeLevel() > this.defaultMessageStore.getScheduleMessageService()
@@ -549,6 +648,12 @@ public class CommitLog {
             long beginLockTimestamp = this.defaultMessageStore.getSystemClock().now();
 
             // 这里设置存储时间戳，才能保证全局有序
+            /**
+             * chen.si 这个是关键点， 才能保证后续的 恢复流程，可以依赖 存储时间戳
+             * 
+             * 不过这里的SystemClock是定时更新的，1ms更新一次。 
+             * 实际上可能会出现多个消息的store时间一致的情况，会导致异常恢复，如果同一时间的消息跨越2个文件，会导致消息漏恢复
+             */
             msg.setStoreTimestamp(beginLockTimestamp);
 
             // 尝试写入
@@ -585,7 +690,7 @@ public class CommitLog {
             }
 
             /**
-             * chen.si:这里的cq 和 tran消息都是异步，在commit log成功后，系统宕机，会导致消息直接丢失
+             * chen.si:这里的cq 和 tran消息都是异步，在commit log成功后，系统宕机，会导致消息直接丢失。 所以有异常恢复机制来确保消息不丢
              */
             DispatchRequest dispatchRequest = new DispatchRequest(//
                 topic,// 1
@@ -623,6 +728,9 @@ public class CommitLog {
 
         // 同步刷盘
         if (FlushDiskType.SYNC_FLUSH == this.defaultMessageStore.getMessageStoreConfig().getFlushDiskType()) {
+        	/**
+        	 * chen.si 同步模式， 将消息发送给 flush 线程， flush成功后，才会返回，除非超时
+        	 */
             GroupCommitService service = (GroupCommitService) this.flushCommitLogService;
             if (msg.isWaitStoreMsgOK()) {
                 request = new GroupCommitRequest(result.getWroteOffset() + result.getWroteBytes());
@@ -642,6 +750,9 @@ public class CommitLog {
         }
         // 异步刷盘
         else {
+        	/**
+        	 * chen.si 通知进行刷盘
+        	 */
             this.flushCommitLogService.wakeup();
         }
 
@@ -686,6 +797,9 @@ public class CommitLog {
      * 根据offset获取特定消息的存储时间 如果出错，则返回-1
      */
     public long pickupStoretimestamp(final long offset, final int size) {
+    	/**
+    	 * chen.si offset为phy offset
+    	 */
         SelectMapedBufferResult result = this.getMessage(offset, size);
         if (null != result) {
             try {
@@ -705,8 +819,14 @@ public class CommitLog {
      */
     public SelectMapedBufferResult getMessage(final long offset, final int size) {
         int mapedFileSize = this.defaultMessageStore.getMessageStoreConfig().getMapedFileSizeCommitLog();
+        /**
+         * chen.si 获取phy offset所在的map file
+         */
         MapedFile mapedFile = this.mapedFileQueue.findMapedFileByOffset(offset, (0 == offset ? true : false));
         if (mapedFile != null) {
+        	/**
+        	 * chen.si 获取指定位置的消息的消息缓冲区
+        	 */
             int pos = (int) (offset % mapedFileSize);
             SelectMapedBufferResult result = mapedFile.selectMapedBuffer(pos, size);
             return result;
@@ -794,7 +914,22 @@ public class CommitLog {
                         this.printFlushProgress();
                     }
 
+                    /**
+                     * chen.si 3种情况，会触发实际的commit：
+                     * 
+                     * 1. 超时时间到了，必须刷新
+                     * 2. 超时时间未到，但是数据已经超过X页，必须刷新（尽管waitForRunning每次都会被唤醒，并且执行commit，但是commit中会忽略不满X页的commit）
+                     * 3. 超时时间未到，数据未超过X页，但是 文件满了
+                     * 
+                     * 以上3种情况，只会commit当前文件，如果还存在下一个文件（最后一个文件，即：queue.committedWhere指向倒数第2个文件），
+                     * 则下一个文件的数据必须等到下一次commit
+                     */
                     CommitLog.this.mapedFileQueue.commit(flushPhysicQueueLeastPages);
+                    /**
+                     * chens.si TODO 第2和3种情况的刷新，不更新storeTimestamp，也不会更新checkpoint， 不知道为什么
+                     * 
+                     * 至少不会造成错误，checkpoint比实际操作慢一点，是没有问题的
+                     */
                     long storeTimestamp = CommitLog.this.mapedFileQueue.getStoreTimestamp();
                     if (storeTimestamp > 0) {
                         CommitLog.this.defaultMessageStore.getStoreCheckpoint().setPhysicMsgTimestamp(
@@ -808,6 +943,9 @@ public class CommitLog {
             }
 
             // 正常shutdown时，要保证全部刷盘才退出
+            /**
+             * chen.si TODO 最后要再看下，是不是commit log完成了，才会触发这里。 不然的话，会有问题（文件满的情况下造成问题）
+             */
             boolean result = false;
             for (int i = 0; i < RetryTimesOver && !result; i++) {
                 result = CommitLog.this.mapedFileQueue.commit(0);
@@ -906,20 +1044,38 @@ public class CommitLog {
         private void doCommit() {
             if (!this.requestsRead.isEmpty()) {
                 for (GroupCommitRequest req : this.requestsRead) {
-                    // 消息有可能在下一个文件，所以最多刷盘2次
+                	// 消息有可能在下一个文件，所以最多刷盘2次
+                	/**
+                	 * chen.si 如果上一个文件满，则先要刷上一个文件，然后再刷当前文件。所以可能要循环2次，具体参考commit方法
+                	 */
                     boolean flushOK = false;
                     for (int i = 0; (i < 2) && !flushOK; i++) {
+                    	/**
+                    	 * chen.si queue中当前消息是否已经刷新到磁盘
+                    	 */
                         flushOK = (CommitLog.this.mapedFileQueue.getCommittedWhere() >= req.getNextOffset());
 
                         if (!flushOK) {
+                        	/**
+                        	 * chen.si 强制刷新
+                        	 */
                             CommitLog.this.mapedFileQueue.commit(0);
                         }
                     }
 
+                    /**
+                     * chen.si 唤醒commit log线程，数据消息存储成功
+                     */
                     req.wakeupCustomer(flushOK);
                 }
 
                 long storeTimestamp = CommitLog.this.mapedFileQueue.getStoreTimestamp();
+                /**
+                 * chen.si 刷新成功，设置commit log的checkpoint
+                 * 
+                 * TODO 单看这里的时间，是有问题的。 commit完成后， store的时间可能已经变化了，这样就标识的checkpoint 比实际的 要大
+                 * 除非 commit那边是同步的， 这边也是单线程的，再看看异步模式
+                 */
                 if (storeTimestamp > 0) {
                     CommitLog.this.defaultMessageStore.getStoreCheckpoint().setPhysicMsgTimestamp(
                         storeTimestamp);

@@ -47,6 +47,9 @@ import com.alibaba.rocketmq.store.SelectMapedBufferResult;
  * @since 2013-7-21
  */
 public class ScheduleMessageService extends ConfigManager {
+	/**
+	 * chen.si 定时消息，继续采用cq的模式，使用 固定的topic名称，其中每个delayLeve 对应一个 topic的分区
+	 */
     public static final String SCHEDULE_TOPIC = "SCHEDULE_TOPIC_XXXX";
     private static final Logger log = LoggerFactory.getLogger(LoggerName.StoreLoggerName);
     private static final long FIRST_DELAY_TIME = 1000L;
@@ -96,11 +99,17 @@ public class ScheduleMessageService extends ConfigManager {
 
 
     private void updateOffset(int delayLevel, long offset) {
+    	/**
+    	 * chen.si 更新offset的 缓存
+    	 */
         this.offsetTable.put(delayLevel, offset);
     }
 
 
     public long computeDeliverTimestamp(final int delayLevel, final long storeTimestamp) {
+    	/**
+    	 * chen.si 根据deplayLevel 计算出 真实的消息延迟发送绝对时间
+    	 */
         Long time = this.delayLevelTable.get(delayLevel);
         if (time != null) {
             return time + storeTimestamp;
@@ -164,6 +173,9 @@ public class ScheduleMessageService extends ConfigManager {
 
     @Override
     public void decode(String jsonString) {
+    	/**
+    	 * chen.si 加载 定时处理进度 文件
+    	 */
         if (jsonString != null) {
             DelayOffsetSerializeWrapper delayOffsetSerializeWrapper =
                     DelayOffsetSerializeWrapper.fromJson(jsonString, DelayOffsetSerializeWrapper.class);
@@ -176,6 +188,9 @@ public class ScheduleMessageService extends ConfigManager {
 
     @Override
     public String configFilePath() {
+    	/**
+    	 * chen.si 定时处理进度 文件： store\config\delayOffset.json
+    	 */
         return this.defaultMessageStore.getMessageStoreConfig().getDelayOffsetStorePath();
     }
 
@@ -222,6 +237,9 @@ public class ScheduleMessageService extends ConfigManager {
 
     class DeliverDelayedMessageTimerTask extends TimerTask {
         private final int delayLevel;
+        /**
+         * chen.si queue的logic offset
+         */
         private final long offset;
 
 
@@ -245,16 +263,39 @@ public class ScheduleMessageService extends ConfigManager {
 
 
         public void executeOnTimeup() {
+        	/**
+        	 * chen.si 获取 delayLevel 对应的 consume queue
+        	 */
             ConsumeQueue cq =
                     ScheduleMessageService.this.defaultMessageStore.findConsumeQueue(SCHEDULE_TOPIC,
                         delayLevel2QueueId(delayLevel));
             if (cq != null) {
+            	/**
+            	 * chen.si 从 指定的 位置 开始，寻找待发送消息
+            	 */
                 SelectMapedBufferResult bufferCQ = cq.getIndexBuffer(this.offset);
                 if (bufferCQ != null) {
                     try {
+                    	/**
+                    	 * chen.si 记录 定时队列 的处理进度
+                    	 */
                         long nextOffset = offset;
                         int i = 0;
+                        /**
+                         * chen.si: https://github.com/alibaba/RocketMQ/issues/470
+                         * 
+                         *  定时服务 处理 cq中的定时消息时，将当前文件的可用缓冲区 的 到期消息 一次全部 写入commit log，才会更新offset。
+							假设这样的场景：极端情况下，整个文件的到期消息都写入commit log完成，但是此时宕机，offset没来得及更新，最终整个文件的到期消息会全部被重新处理写入commit log一遍。
+							在大量使用定时消息时，这样造成的消息重复量太大。
+							
+							建议增加如下功能：
+								cq的到期消息一次批量处理 超过X条，立刻更新offset
+								超过Y条到期消息 被处理， 也触发 定时处理进度写磁盘 的操作（目前是Y秒会写一次，Y可配置）
+                         */
                         for (; i < bufferCQ.getSize(); i += ConsumeQueue.CQStoreUnitSize) {
+                        	/**
+                        	 * chen.si 定时消息的3个索引信息
+                        	 */
                             long offsetPy = bufferCQ.getByteBuffer().getLong();
                             int sizePy = bufferCQ.getByteBuffer().getInt();
                             long tagsCode = bufferCQ.getByteBuffer().getLong();
@@ -262,32 +303,60 @@ public class ScheduleMessageService extends ConfigManager {
                             // 队列里存储的tagsCode实际是一个时间点
                             long deliverTimestamp = tagsCode;
 
+                            /**
+                             * chen.si 计算下一个定时消息的位置
+                             */
                             nextOffset = offset + (i / ConsumeQueue.CQStoreUnitSize);
 
+                            /**
+                             * chen.si 是否到期了
+                             */
                             long countdown = deliverTimestamp - System.currentTimeMillis();
                             // 时间到了，该投递
                             if (countdown <= 0) {
+                            	/**
+                            	 * chen.si 从commit log中找到定时的数据消息
+                            	 */
                                 MessageExt msgExt =
                                         ScheduleMessageService.this.defaultMessageStore.lookMessageByOffset(
                                             offsetPy, sizePy);
                                 if (msgExt != null) {
+                                	/**
+                                	 * chen.si 重新构建  到期的 数据消息
+                                	 */
                                     MessageExtBrokerInner msgInner = this.messageTimeup(msgExt);
+                                    /**
+                                     * chen.si 作为普通消息，放入commit log
+                                     */
                                     PutMessageResult putMessageResult =
                                             ScheduleMessageService.this.defaultMessageStore
                                                 .putMessage(msgInner);
                                     // 成功
                                     if (putMessageResult != null
                                             && putMessageResult.getPutMessageStatus() == PutMessageStatus.PUT_OK) {
+                                    	/**
+                                    	 * chen.si 继续读取文件，尝试下一条消息
+                                    	 */
                                         continue;
                                     }
                                     // 失败
                                     else {
+                                    	/**
+                                    	 * chen.si 当前到期的消息 处理失败，只能跳过忽略。 进行下一条消息的处理
+                                    	 */
                                         log.error(
                                             "a message time up, but reput it failed, topic: {} msgId {}",
                                             msgExt.getTopic(), msgExt.getMsgId());
+                                        
+                                        /**
+                                         * chen.si TODO 这个重新启动timer，为什么间隔10s这么长，会导致消息不及时被处理吧
+                                         */
                                         ScheduleMessageService.this.timer.schedule(
                                             new DeliverDelayedMessageTimerTask(this.delayLevel, nextOffset),
                                             DELAY_FOR_A_PERIOD);
+                                        /**
+                                         * chen.si 更新当前定时队列的 处理进度
+                                         */
                                         ScheduleMessageService.this.updateOffset(this.delayLevel, nextOffset);
                                         return;
                                     }
@@ -295,14 +364,23 @@ public class ScheduleMessageService extends ConfigManager {
                             }
                             // 时候未到，继续定时
                             else {
+                            	/**
+                            	 * chen.si 精确控制，只等待  剩余的超时间隔
+                            	 */
                                 ScheduleMessageService.this.timer.schedule(
                                     new DeliverDelayedMessageTimerTask(this.delayLevel, nextOffset),
                                     countdown);
+                                /**
+                                 * chen.si 更新当前定时队列的 处理进度
+                                 */
                                 ScheduleMessageService.this.updateOffset(this.delayLevel, nextOffset);
                                 return;
                             }
                         } // end of for
 
+                        /**
+                         * chen.si 当前的定时消息缓冲 处理结束，后续从nextOff接着处理
+                         */
                         nextOffset = offset + (i / ConsumeQueue.CQStoreUnitSize);
                         ScheduleMessageService.this.timer.schedule(new DeliverDelayedMessageTimerTask(
                             this.delayLevel, nextOffset), DELAY_FOR_A_WHILE);
@@ -316,6 +394,9 @@ public class ScheduleMessageService extends ConfigManager {
                 } // end of if (bufferCQ != null)
             } // end of if (cq != null)
 
+            /**
+             * chen.si 如果cq  或者  buffer 未生成，则 下一次再检查
+             */
             ScheduleMessageService.this.timer.schedule(new DeliverDelayedMessageTimerTask(this.delayLevel,
                 this.offset), DELAY_FOR_A_WHILE);
         }
@@ -340,8 +421,14 @@ public class ScheduleMessageService extends ConfigManager {
             msgInner.setReconsumeTimes(msgExt.getReconsumeTimes());
 
             msgInner.setWaitStoreMsgOK(false);
+            /**
+             * chen.si 已经到期，需要作为普通消息进行处理，去除  定时  的属性
+             */
             msgInner.clearProperty(MessageConst.PROPERTY_DELAY_TIME_LEVEL);
 
+            /**
+             * chen.si 借助定时队列 的 topic 和 queueId，来记录定时消息。   到期后，需要恢复topic和queueId，准备重新放入commit log，作为普通消息处理
+             */
             // 恢复Topic
             msgInner.setTopic(msgInner.getProperty(MessageConst.PROPERTY_REAL_TOPIC));
 

@@ -188,6 +188,9 @@ public class MixAll {
             FileReader fileReader = null;
             try {
                 fileReader = new FileReader(file);
+                /**
+                 * chen.si 一般没问题，但是存在中断等，会导致失败。最好自己控制read，或者用 RandomAccessFile.readFully
+                 */
                 int len = fileReader.read(data);
                 result = (len == data.length);
             }

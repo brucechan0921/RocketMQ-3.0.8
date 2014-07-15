@@ -258,7 +258,7 @@ public class TransactionStateService {
             this.tranStateTable.destroy();
             // 第二步，通过RedoLog全量恢复StateTable
             /**
-             * chen.si：redo log
+             * chen.si：重新生成tran table
              */
             this.recreateStateTable();
         }

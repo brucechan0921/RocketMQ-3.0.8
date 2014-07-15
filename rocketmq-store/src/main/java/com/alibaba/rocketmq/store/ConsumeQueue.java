@@ -88,7 +88,7 @@ public class ConsumeQueue {
 
     public boolean load() {
     	/**
-    	 * chen.si 加载 <topic><queueid>下的 maped files
+    	 * chen.si 加载 <topic>/<queueid>下的 maped files
     	 */
         boolean result = this.mapedFileQueue.load();
         log.info("load consume queue " + this.topic + "-" + this.queueId + " " + (result ? "OK" : "Failed"));
@@ -123,13 +123,19 @@ public class ConsumeQueue {
                     // 说明当前存储单元有效
                     // TODO 这样判断有效是否合理？
                     if (offset >= 0 && size > 0) {
-                    	//chen.si 看是否到了最后一条消息
+                    	/**
+                    	 * chen.si 看是否到了最后一条消息
+                    	 */
                         mapedFileOffset = i + CQStoreUnitSize;
-                        //chen.si cq的消息在commit log的最大offset
+                        /**
+                         * chen.si cq的消息在commit log的最大offset
+                         */
                         this.maxPhysicOffset = offset;
                     }
                     else {
-                    	//chen.si 文件到了最后一条消息，结束这个文件
+                    	/**
+                    	 * chen.si 文件到了最后一条消息，结束这个文件
+                    	 */
                         log.info("recover current consume queue file over,  " + mapedFile.getFileName() + " "
                                 + offset + " " + size + " " + tagsCode);
                         break;
@@ -315,7 +321,7 @@ public class ConsumeQueue {
 
         // 先改变逻辑队列存储的物理Offset
         /**
-         * chen.si 暂时不理解这里的目的
+         * chen.si TODO 暂时不理解这里的目的
          */
         this.maxPhysicOffset = phyOffet - 1;
 
@@ -360,7 +366,7 @@ public class ConsumeQueue {
                         if (offset >= 0 && size > 0) {
                             // 如果逻辑队列存储的最大物理offset大于物理队列最大offset，则返回
                         	/**
-                        	 * chen.si 不清理掉这种无效的消息？ 
+                        	 * chen.si 不清理掉这种多余的消息？ 
                         	 * 
                         	 * 		   --即使设置了wrote pos 和 comit pos，后续写会覆盖消息，但是如果立刻正常关闭，又会如何
                         	 */
@@ -518,6 +524,8 @@ public class ConsumeQueue {
             if (result) {
             	/**
             	 * chen.si 设置checkpoint
+            	 * 
+            	 * 恢复流程 和 正常接收流程 都会更新 checkpoint
             	 */
                 this.defaultMessageStore.getStoreCheckpoint().setLogicsMsgTimestamp(storeTimestamp);
                 return;
@@ -560,10 +568,38 @@ public class ConsumeQueue {
     private boolean putMessagePostionInfo(final long offset, final int size, final long tagsCode,
             final long cqOffset) {
         // 在数据恢复时会走到这个流程
+    	/**
+    	 * chen.si 这里是恢复的关键点，cq中的消息 有2种情况需要考虑：
+    	 * 
+    	 * 1. commit log中的物理消息存储成功，对应的cq的消息也存储成功，
+    	 * 2. commit log中的物理消息存储成功，对应的cq的消息 未 存储成功（可能愿意： broker被强制关闭等）
+    	 * 
+    	 * 对于第1种情况，不需要执行cq的写入操作，所以直接返回
+    	 * 对于第2种情况，需要执行cq的写入操作，以 补偿 commit log中 未写入cq 的消息
+    	 * 
+    	 * 这里的判断依据，就是依赖 commit log中消息的phy offset  以及  cq对应的最后一条索引消息对应的 commitlog中的 phy offset
+    	 * 
+    	 * 如果offset <= this.maxPhysicOffset， 说明 消息在cq中是存在的
+    	 * 
+    	 * 否则的话，消息在cq不存在，执行写入操作。
+    	 * 
+    	 * 那如果中间的消息丢失，怎么办？ 不可能，commit log是同步操作的，消息是按照顺序在commit log中存储的，所以也是一条条触发给cq的
+    	 */
+    	
+    	/**
+    	 * chen.si 恢复流程走到这里，说明消息已经在cq存储成功，不需要 恢复写入，直接返回。
+    	 * 
+    	 * 正常接收消息写入，不会走到里面
+    	 */
         if (offset <= this.maxPhysicOffset) {
             return true;
         }
 
+        /**
+         * chen.si 恢复时，如果commit log消息  未 来得及写入 cq，这里会 写
+         * 
+         * 正常接收消息写入，也会走这里
+         */
         this.byteBufferIndex.flip();
         this.byteBufferIndex.limit(CQStoreUnitSize);
         this.byteBufferIndex.putLong(offset);

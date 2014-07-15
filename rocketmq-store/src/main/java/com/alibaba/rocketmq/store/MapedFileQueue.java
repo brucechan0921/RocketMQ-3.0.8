@@ -252,6 +252,8 @@ public class MapedFileQueue {
     /**
      * 获取最后一个MapedFile对象，如果一个都没有，则新创建一个，如果最后一个写满了，则新创建一个
      * 
+     * chen.si 这里必须保证startOffset 是最后一个文件 的 offset，否则只会返回last file。这个需要上层应用控制，否则会有问题
+     * 
      * @param startOffset
      *            如果创建新的文件，起始offset
      * @return
@@ -398,6 +400,9 @@ public class MapedFileQueue {
         // 最后一个文件处于写状态，不能删除
         int mfsLength = mfs.length - 1;
         int deleteCount = 0;
+        /**
+         * chen.si TODO 先删物理文件，然后才从queue里删除，不会出问题吗？
+         */
         List<MapedFile> files = new ArrayList<MapedFile>();
         if (null != mfs) {
             for (int i = 0; i < mfsLength; i++) {
@@ -506,8 +511,14 @@ public class MapedFileQueue {
             long tmpTimeStamp = mapedFile.getStoreTimestamp();
             int offset = mapedFile.commit(flushLeastPages);
             long where = mapedFile.getFileFromOffset() + offset;
+            /**
+             * chen.si 关键点，通过commit完成后的where 与 committedWhere比较，以判断消息是否全部刷盘成功
+             */
             result = (where == this.committedWhere);
             this.committedWhere = where;
+            /**
+             * chen.si TODO 看不明白，满足X页了 或者 文件满，进行了commit，为什么不更新storeTimestamp
+             */
             if (0 == flushLeastPages) {
                 this.storeTimestamp = tmpTimeStamp;
             }
@@ -517,6 +528,13 @@ public class MapedFileQueue {
     }
 
 
+    /**
+     * chen.si 根据offset，找到offset所在的文件
+     * 
+     * @param offset
+     * @param returnFirstOnNotFound
+     * @return
+     */
     public MapedFile findMapedFileByOffset(final long offset, final boolean returnFirstOnNotFound) {
         try {
             this.readWriteLock.readLock().lock();

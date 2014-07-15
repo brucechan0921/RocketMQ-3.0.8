@@ -1539,6 +1539,9 @@ public class DefaultMessageStore implements MessageStore {
                         break;
                     }
 
+                    /**
+                     * chen.si 一方面 非事务消息不用处理，另一方面，异常恢复时，commit log消息不会走到这里
+                     */
                     // 2、更新Transaction State Table
                     if (req.getProducerGroup() != null) {
                         switch (tranType) {
@@ -1563,6 +1566,10 @@ public class DefaultMessageStore implements MessageStore {
                             break;
                         }
                     }
+                    /**
+                     * chen.si 恢复流程中，系统会基于commit log来重新生成redo log，但是生成的时候类似 index cq：
+                     * 			只有当前消息的phy offset 小于  当前redo log的最大phy offset，才会 append到 redo log
+                     */
                     // 3、记录Transaction Redo Log
                     switch (tranType) {
                     case MessageSysFlag.TransactionNotType:
