@@ -103,6 +103,9 @@ public class TopicConfigManager extends ConfigManager {
 
 
     public boolean isSystemTopic(final String topic) {
+    	/**
+    	 * chen.si 判断当前topic是否为系统级别的topic
+    	 */
         boolean res = //
                 topic.equals(MixAll.DEFAULT_TOPIC)//
                         || topic.equals(MixAll.SELF_TEST_TOPIC)//
@@ -136,6 +139,9 @@ public class TopicConfigManager extends ConfigManager {
         TopicConfig topicConfig = null;
         boolean createNew = false;
 
+        /**
+         * chen.si 一般是测试环境使用。 要想自动创建新的topic，必须携带defaultTopic，如果有defaultTopic有继承权限PERM_INHERIT，则可创建。
+         */
         try {
             if (this.lockTopicConfigTable.tryLock(LockTimeoutMillis, TimeUnit.MILLISECONDS)) {
                 try {
@@ -197,6 +203,9 @@ public class TopicConfigManager extends ConfigManager {
         }
 
         if (createNew) {
+        	/**
+        	 * chen.si 通知name server，这个broker有新的topic创建
+        	 */
             this.brokerController.registerBrokerAll();
         }
 

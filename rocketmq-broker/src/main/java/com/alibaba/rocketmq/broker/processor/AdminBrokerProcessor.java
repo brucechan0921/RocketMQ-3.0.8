@@ -912,6 +912,9 @@ public class AdminBrokerProcessor implements NettyRequestProcessor {
     private RemotingCommand getAllDelayOffset(ChannelHandlerContext ctx, RemotingCommand request) {
         final RemotingCommand response = RemotingCommand.createResponseCommand(null);
 
+        /**
+         * chen.si 直接将内存中的 定时消息处理进度  encode成string，发送给slave。当前进程为master
+         */
         String content =
                 ((DefaultMessageStore) this.brokerController.getMessageStore()).getScheduleMessageService()
                     .encode();

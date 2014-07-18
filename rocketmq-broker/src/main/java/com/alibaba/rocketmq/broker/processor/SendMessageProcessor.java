@@ -84,6 +84,9 @@ public class SendMessageProcessor implements NettyRequestProcessor {
         MQRequestCode code = MQRequestCode.valueOf(request.getCode());
         switch (code) {
         case SEND_MESSAGE:
+        	/**
+        	 * chen.si 消息发送事件，包括 普通消息、事务消息prepare/commit/rollback、定时消息
+        	 */
             return this.sendMessage(ctx, request);
         case CONSUMER_SEND_MSG_BACK:
             return this.consumerSendMsgBack(ctx, request);
@@ -257,6 +260,9 @@ public class SendMessageProcessor implements NettyRequestProcessor {
             log.debug("receive SendMessage request command, " + request);
         }
 
+        /**
+         * chen.si 判断当前broker是否有 写 权限
+         */
         // 检查Broker权限
         if (!PermName.isWriteable(this.brokerController.getBrokerConfig().getBrokerPermission())) {
             response.setCode(MQResponseCode.NO_PERMISSION_VALUE);
@@ -267,6 +273,9 @@ public class SendMessageProcessor implements NettyRequestProcessor {
 
         final byte[] body = request.getBody();
 
+        /**
+         * chen.si 保留字包括2个： TBW102  和  broker-cluster-name
+         */
         // Topic名字是否与保留字段冲突
         if (!this.brokerController.getTopicConfigManager().isTopicCanSendMessage(requestHeader.getTopic())) {
             String errorMsg =
@@ -283,6 +292,10 @@ public class SendMessageProcessor implements NettyRequestProcessor {
         if (null == topicConfig) {
             log.warn("the topic " + requestHeader.getTopic() + " not exist, producer: "
                     + ctx.channel().remoteAddress());
+            
+            /**
+             * chen.si 可以自动创建topic
+             */
             topicConfig = this.brokerController.getTopicConfigManager().createTopicInSendMessageMethod(//
                 requestHeader.getTopic(), //
                 requestHeader.getDefaultTopic(), //
@@ -291,6 +304,17 @@ public class SendMessageProcessor implements NettyRequestProcessor {
 
             // 尝试看下是否是失败消息发回
             if (null == topicConfig) {
+            	/**
+            	 * chen.si TODO 需要看下这里的RETRY具体工作流程，先贴一个topics.json：
+            	 * 
+            	 * "%RETRY%benchmark_consumer":{
+                        "perm":6,
+                        "readQueueNums":1,
+                        "topicFilterType":"SINGLE_TAG",
+                        "topicName":"%RETRY%benchmark_consumer",
+                        "writeQueueNums":1
+                },
+            	 */
                 if (requestHeader.getTopic().startsWith(MixAll.RETRY_GROUP_TOPIC_PREFIX)) {
                     topicConfig =
                             this.brokerController.getTopicConfigManager().createTopicInSendMessageBackMethod(
@@ -307,6 +331,16 @@ public class SendMessageProcessor implements NettyRequestProcessor {
         }
 
         // 检查topic权限
+        /**
+         * chen.si 比如：
+         * "TBW102":{
+                        "perm":7,
+                        "readQueueNums":8,
+                        "topicFilterType":"SINGLE_TAG",
+                        "topicName":"TBW102",
+                        "writeQueueNums":8
+            	其中perm 对于 READ=4 WRITE=2 INHERIT=1
+         */
         if (!PermName.isWriteable(topicConfig.getPerm())) {
             response.setCode(MQResponseCode.NO_PERMISSION_VALUE);
             response.setRemark("the topic[" + requestHeader.getTopic() + "] sending message is forbidden");
@@ -314,6 +348,9 @@ public class SendMessageProcessor implements NettyRequestProcessor {
         }
 
         // 检查队列有效性
+        /**
+         * chen.si 队列，也就是消息的逻辑分区
+         */
         int queueIdInt = requestHeader.getQueueId();
         if (queueIdInt >= topicConfig.getWriteQueueNums()) {
             String errorInfo =
@@ -327,6 +364,9 @@ public class SendMessageProcessor implements NettyRequestProcessor {
 
         // 随机指定一个队列
         if (queueIdInt < 0) {
+        	/**
+        	 * chen.si 设置queueId为 负数，则随机选择 分区 进行存储
+        	 */
             queueIdInt = Math.abs(this.random.nextInt() % 99999999) % topicConfig.getWriteQueueNums();
         }
 
@@ -351,8 +391,14 @@ public class SendMessageProcessor implements NettyRequestProcessor {
         msgInner.setBornHost(ctx.channel().remoteAddress());
         msgInner.setStoreHost(this.getStoreHost());
 
+        /**
+         * chen.si TODO 了解下流程
+         */
         msgInner.setReconsumeTimes(0);
 
+        /**
+         * chen.si 配置是否支持 事务消息，默认是支持
+         */
         // 检查事务消息
         if (this.brokerController.getBrokerConfig().isRejectTransactionMessage()) {
             String traFlag = msgInner.getProperty(MessageConst.PROPERTY_TRANSACTION_PREPARED);
@@ -418,6 +464,9 @@ public class SendMessageProcessor implements NettyRequestProcessor {
                 responseHeader.setQueueId(queueIdInt);
                 responseHeader.setQueueOffset(putMessageResult.getAppendMessageResult().getLogicsOffset());
 
+                /**
+                 * chen.si  oneway模式，不需要返回响应；request-response模式，需要
+                 */
                 // 直接返回
                 if (!request.isOnewayRPC()) {
                     try {
@@ -440,6 +489,9 @@ public class SendMessageProcessor implements NettyRequestProcessor {
                     }
                 }
 
+                /**
+                 * chen.si 可能存在 被hang的 pull操作， 这里有新的消息，所以需要通知 pull操作
+                 */
                 this.brokerController.getPullRequestHoldService().notifyMessageArriving(
                     requestHeader.getTopic(), queueIdInt,
                     putMessageResult.getAppendMessageResult().getLogicsOffset());

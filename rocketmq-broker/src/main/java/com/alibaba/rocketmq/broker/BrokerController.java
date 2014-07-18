@@ -347,6 +347,9 @@ public class BrokerController {
                     @Override
                     public void run() {
                         try {
+                        	/**
+                        	 * chen.si 同步4种信息：  消费进度、定时进度、topic 和  sub group
+                        	 */
                             BrokerController.this.slaveSynchronize.syncAll();
                         }
                         catch (Exception e) {

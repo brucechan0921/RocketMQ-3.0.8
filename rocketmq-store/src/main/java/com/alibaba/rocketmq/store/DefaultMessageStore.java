@@ -124,11 +124,17 @@ public class DefaultMessageStore implements MessageStore {
 
         switch (this.messageStoreConfig.getBrokerRole()) {
         case SLAVE:
+        	/**
+        	 * chen.si slave模式，需要重放master的消息；但是不需要处理 定时消息， 全部由重放完成
+        	 */
             this.reputMessageService = new ReputMessageService();
             this.scheduleMessageService = null;
             break;
         case ASYNC_MASTER:
         case SYNC_MASTER:
+        	/**
+        	 * chen.si master模式，需要处理定时消息，但是不需要重放功能
+        	 */
             this.reputMessageService = null;
             this.scheduleMessageService = new ScheduleMessageService(this);
             break;
@@ -1666,24 +1672,39 @@ public class DefaultMessageStore implements MessageStore {
 
 
         public void setReputFromOffset(long reputFromOffset) {
+        	/**
+        	 * chen.si 设置重放的起始offset，启动时，一般设置为commit log的max offset
+        	 */
             this.reputFromOffset = reputFromOffset;
         }
 
 
         private void doReput() {
             for (boolean doNext = true; doNext;) {
+            	/**
+            	 * chen.si 根据 offset获取commit log数据，准备重放
+            	 */
                 SelectMapedBufferResult result = DefaultMessageStore.this.commitLog.getData(reputFromOffset);
                 if (result != null) {
                     try {
                         for (int readSize = 0; readSize < result.getSize() && doNext;) {
+                        	/**
+                        	 * chen.si 一条条的读取物理消息
+                        	 */
                             DispatchRequest dispatchRequest =
                                     DefaultMessageStore.this.commitLog.checkMessageAndReturnSize(
                                         result.getByteBuffer(), false, false);
                             int size = dispatchRequest.getMsgSize();
                             // 正常数据
                             if (size > 0) {
+                            	/**
+                            	 * chen.si 消息放到 消息分发 队列中，进行真实的重放，包括 逻辑分区、事务 和 定时
+                            	 */
                                 DefaultMessageStore.this.putDispatchRequest(dispatchRequest);
 
+                                /**
+                                 * chen.si 更新当前处理的offset进度
+                                 */
                                 this.reputFromOffset += size;
                                 readSize += size;
                                 DefaultMessageStore.this.storeStatsService
@@ -1698,6 +1719,9 @@ public class DefaultMessageStore implements MessageStore {
                             }
                             // 走到文件末尾，切换至下一个文件
                             else if (size == 0) {
+                            	/**
+                            	 * chen.si 很关键，自己跳到下一个文件的开头，没有其他人通知 跳到下一个文件，一定要自己做。
+                            	 */
                                 this.reputFromOffset =
                                         DefaultMessageStore.this.commitLog.rollNextFile(this.reputFromOffset);
                                 readSize = result.getSize();

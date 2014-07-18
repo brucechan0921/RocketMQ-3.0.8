@@ -45,6 +45,12 @@ import com.alibaba.rocketmq.store.DefaultMessageStore;
 /**
  * HA服务，负责同步双写，异步复制功能
  * 
+ * chen.si 这里的HA服务，最核心的原理就是基于commit log 和 offset进行的，包括2点：
+ * 
+ * 1. 只复制commit log中的物理数据，而不管其他的逻辑信息，比如： 逻辑分区消息、索引消息、事务信息、redo信息 以及 定时信息。这些信息 由slave基于复制的物理数据进行重新生成
+ * 
+ * 2. master根据slave上报的offset进行复制物理数据，slave负责维护自己的offset
+ * 
  * @author shijia.wxr<vintage.wang@gmail.com>
  * @since 2013-7-21
  */
@@ -95,6 +101,11 @@ public class HAService {
      * @return
      */
     public boolean isSlaveOK(final long masterPutWhere) {
+    	/**
+    	 * chen.si slave正常的判断条件：
+    	 * 1. 存在slave连接
+    	 * 2. slave的最新offset 不能落后  master的当前消息的offset  超过一个指
+    	 */
         boolean result = this.connectionCount.get() > 0;
         result =
                 result
@@ -108,6 +119,13 @@ public class HAService {
      * 通知复制了部分数据
      */
     public void notifyTransferSome(final long offset) {
+    	/**
+    	 * chen.si 这里记录最大的slave offset，基于最大的offset进行更新 
+    	 * 			同步双写模式下，有用；异步复制下，没有用处。 不过这里为什么要使用CAS，不能直接更新？ 需要判断前值吗？
+    	 * 
+    	 * 			另外，存在多个slave的情况下，这里只能代表 最快的slave复制的offset，其他慢的slave的offset无法记录。 
+    	 * 			带来的问题，就是 多个slave，不知道哪个的数据最新。 切换的时候，不知道选择哪个 
+    	 */
         for (long value = this.push2SlaveMaxOffset.get(); offset > value;) {
             boolean ok = this.push2SlaveMaxOffset.compareAndSet(value, offset);
             if (ok) {
@@ -180,6 +198,10 @@ public class HAService {
         return waitNotifyObject;
     }
 
+    /**
+     * chen.si Master作为socket服务端，用于处理 多个slave的连接请求，主要用于复制数据
+     *
+     */
     class AcceptSocketService extends ServiceThread {
         private ServerSocketChannel serverSocketChannel;
         private Selector selector;
@@ -193,6 +215,9 @@ public class HAService {
 
         public void beginAccept() {
             try {
+            	/**
+            	 * chen.si 在本机的所有IP 以及 指定 端口上 监听
+            	 */
                 this.serverSocketChannel = ServerSocketChannel.open();
                 this.selector = RemotingUtil.openSelector();
                 this.serverSocketChannel.socket().setReuseAddress(true);
@@ -216,6 +241,9 @@ public class HAService {
                     Set<SelectionKey> selected = this.selector.selectedKeys();
                     if (selected != null) {
                         for (SelectionKey k : selected) {
+                        	/**
+                        	 * chen.si 有新的slave连接请求过来，接收它
+                        	 */
                             if ((k.readyOps() & SelectionKey.OP_ACCEPT) != 0) {
                                 SocketChannel sc = ((ServerSocketChannel) k.channel()).accept();
                                 if (sc != null) {
@@ -223,8 +251,17 @@ public class HAService {
                                             + sc.socket().getRemoteSocketAddress());
 
                                     try {
+                                    	/**
+                                    	 * chen.si 构造slave的连接
+                                    	 */
                                         HAConnection conn = new HAConnection(HAService.this, sc);
+                                        /**
+                                         * chen.si 开启 处理slave的数据请求的 读/写 模式
+                                         */
                                         conn.start();
+                                        /**
+                                         * chen.si 管理slave客户端的连接
+                                         */
                                         HAService.this.addConnection(conn);
                                     }
                                     catch (Exception e) {
@@ -297,6 +334,9 @@ public class HAService {
         private void doWaitTransfer() {
             if (!this.requestsRead.isEmpty()) {
                 for (GroupCommitRequest req : this.requestsRead) {
+                	/**
+                	 * chen.si 比较slave的复制offset 和  当前消息的offset，来判断是否已经同步成功
+                	 */
                     boolean transferOK = HAService.this.push2SlaveMaxOffset.get() >= req.getNextOffset();
                     for (int i = 0; !transferOK && i < 5;) {
                         this.notifyTransferObject.waitForRunning(1000);
@@ -344,12 +384,22 @@ public class HAService {
         }
     }
 
+    /**
+     * chen.si slave中的HA client，主要做2件事情：
+     * 
+     * 1. 向master上报 自己的存储 offset
+     * 2. 存储master push过来的复制数据
+     *
+     */
     class HAClient extends ServiceThread {
         private static final int ReadMaxBufferSize = 1024 * 1024 * 4;
         // 主节点IP:PORT
         private final AtomicReference<String> masterAddress = new AtomicReference<String>();
         // 向Master汇报Slave最大Offset
         private final ByteBuffer reportOffset = ByteBuffer.allocate(8);
+        /**
+         * chen.si slave 连接 master 的 channel
+         */
         private SocketChannel socketChannel;
         private Selector selector;
         private long lastWriteTimestamp = System.currentTimeMillis();
@@ -387,6 +437,9 @@ public class HAService {
 
 
         private boolean reportSlaveMaxOffset(final long maxOffset) {
+        	/**
+        	 * chen.si 上报slave的最大offset
+        	 */
             this.reportOffset.position(0);
             this.reportOffset.limit(8);
             this.reportOffset.putLong(maxOffset);
@@ -446,12 +499,18 @@ public class HAService {
 
         private boolean processReadEvent() {
             int readSizeZeroTimes = 0;
+            /**
+             * chen.si 缓存还有空间，继续读
+             */
             while (this.byteBufferRead.hasRemaining()) {
                 try {
                     int readSize = this.socketChannel.read(this.byteBufferRead);
                     if (readSize > 0) {
                         lastWriteTimestamp = HAService.this.defaultMessageStore.getSystemClock().now();
                         readSizeZeroTimes = 0;
+                        /**
+                         * chen.si 读取到数据，准备处理
+                         */
                         boolean result = this.dispatchReadRequest();
                         if (!result) {
                             log.error("HAClient, dispatchReadRequest error");
@@ -486,11 +545,20 @@ public class HAService {
             while (true) {
                 int diff = this.byteBufferRead.position() - this.dispatchPostion;
                 if (diff >= MSG_HEADER_SIZE) {
+                	/**
+                	 * chen.si 重复使用buffer，所以直接通过 指定pos 来读取数据
+                	 * 
+                	 * 数据格式：<Phy Offset 8字节> <Body Size 4字节> <Body Data>
+                	 */
                     long masterPhyOffset = this.byteBufferRead.getLong(this.dispatchPostion);
                     int bodySize = this.byteBufferRead.getInt(this.dispatchPostion + 8);
 
                     long slavePhyOffset = HAService.this.defaultMessageStore.getMaxPhyOffset();
 
+                    /**
+                     * chen.si 验证当前slave的commit log的max offset， 关键要与 master push过来的offset一致。
+                     * 			否则说明数据有错误，断开重新复制
+                     */
                     // 发生重大错误
                     if (slavePhyOffset != 0) {
                         if (slavePhyOffset != masterPhyOffset) {
@@ -512,6 +580,10 @@ public class HAService {
                         this.byteBufferRead.position(readSocketPos);
                         this.dispatchPostion += MSG_HEADER_SIZE + bodySize;
 
+                        /**
+                         * chen.si 有修改，立刻上报给master。这样可以通知master，到某个offset的消息已经存储完毕。
+                         * 			在同步双写的模式下，master根据上报的offset，可以唤醒正在等待的前端线程
+                         */
                         if (!reportSlaveMaxOffsetPlus()) {
                             return false;
                         }
@@ -520,6 +592,9 @@ public class HAService {
                     }
                 }
 
+                /**
+                 * chen.si 其实buffer不够用，就可以reallocate
+                 */
                 if (!this.byteBufferRead.hasRemaining()) {
                     this.reallocateByteBuffer();
                 }
@@ -536,6 +611,9 @@ public class HAService {
             // 只要本地有更新，就汇报最大物理Offset
             long currentPhyOffset = HAService.this.defaultMessageStore.getMaxPhyOffset();
             if (currentPhyOffset > this.currentReportedOffset) {
+            	/**
+            	 * chen.si 又先设置了值，然后才上报，不大好。 不过失败了，就立刻关闭此次复制链接了，重新复制。这样也不会导致问题了。
+            	 */
                 this.currentReportedOffset = currentPhyOffset;
                 result = this.reportSlaveMaxOffset(this.currentReportedOffset);
                 if (!result) {
@@ -549,6 +627,9 @@ public class HAService {
 
 
         private boolean connectMaster() throws ClosedChannelException {
+        	/**
+        	 * chen.si salve 连接 master
+        	 */
             if (null == socketChannel) {
                 String addr = this.masterAddress.get();
                 if (addr != null) {
@@ -608,6 +689,9 @@ public class HAService {
             while (!this.isStoped()) {
                 try {
                     if (this.connectMaster()) {
+                    	/**
+                    	 * chen.si slave向master上报offset
+                    	 */
                         // 先汇报最大物理Offset || 定时心跳方式汇报
                         if (this.isTimeToReportOffset()) {
                             boolean result = this.reportSlaveMaxOffset(this.currentReportedOffset);
