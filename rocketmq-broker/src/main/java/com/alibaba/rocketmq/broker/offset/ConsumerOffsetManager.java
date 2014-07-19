@@ -40,6 +40,9 @@ public class ConsumerOffsetManager extends ConfigManager {
     private static final Logger log = LoggerFactory.getLogger(LoggerName.BrokerLoggerName);
     private static final String TOPIC_GROUP_SEPARATOR = "@";
 
+    /**
+     * chen.si 消费offset有3个维度：1. topic 2. consumer group 3. queue Id
+     */
     private ConcurrentHashMap<String/* topic@group */, ConcurrentHashMap<Integer, Long>> offsetTable =
             new ConcurrentHashMap<String, ConcurrentHashMap<Integer, Long>>(512);
 
@@ -58,6 +61,9 @@ public class ConsumerOffsetManager extends ConfigManager {
 
 
     public Set<String> whichTopicByConsumer(final String group) {
+    	/**
+    	 * chen.si 获取这个consumer group消费过的topic列表
+    	 */
         Set<String> topics = new HashSet<String>();
 
         Iterator<Entry<String, ConcurrentHashMap<Integer, Long>>> it = this.offsetTable.entrySet().iterator();
@@ -78,6 +84,9 @@ public class ConsumerOffsetManager extends ConfigManager {
 
     private static ConcurrentHashMap<String, ConcurrentHashMap<Integer, Long>> cloneOffsetTable(
             final ConcurrentHashMap<String, ConcurrentHashMap<Integer, Long>> input) {
+    	/**
+    	 * chen.si 普通工具方法，对offset table进行clone
+    	 */
         ConcurrentHashMap<String, ConcurrentHashMap<Integer, Long>> out =
                 new ConcurrentHashMap<String, ConcurrentHashMap<Integer, Long>>(input.size());
 
@@ -109,7 +118,13 @@ public class ConsumerOffsetManager extends ConfigManager {
 
 
     public long computePullTPS(final String topicgroup) {
+    	/**
+    	 * chen.si 获取上次记录的 topicgroup 对应的offset信息
+    	 */
         ConcurrentHashMap<Integer, Long> mapLast = this.offsetTableLast.get(topicgroup);
+    	/**
+    	 * chen.si 获取上上次记录的 topicgroup 对应的offset信息
+    	 */
         ConcurrentHashMap<Integer, Long> mapLastLast = this.offsetTableLastLast.get(topicgroup);
         long totalMsgs = 0;
         if (mapLast != null && mapLastLast != null) {
@@ -117,6 +132,9 @@ public class ConsumerOffsetManager extends ConfigManager {
                 Long offsetLast = mapLast.get(queueIdLast);
                 Long offsetLastLast = mapLastLast.get(queueIdLast);
                 if (offsetLast != null && offsetLastLast != null) {
+                	/**
+                	 * chen.si 根据queueId来找到 上次   以及 上上次  的 消费进度， 然后计算出 2次记录点 之间的消费消息总数
+                	 */
                     long diff = offsetLast - offsetLastLast;
                     totalMsgs += diff;
                 }
@@ -125,6 +143,10 @@ public class ConsumerOffsetManager extends ConfigManager {
 
         if (0 == totalMsgs)
             return 0;
+        /**
+         * chen.si 这里的消费消息总数，认为是一个 getFlushConsumerOffsetHistoryInterval 内产生的
+         * 		        为了统计TPS，也就是每秒，所以除以这个interval
+         */
         double pullTps =
                 totalMsgs * 1000
                         / this.brokerController.getBrokerConfig().getFlushConsumerOffsetHistoryInterval();
@@ -134,6 +156,9 @@ public class ConsumerOffsetManager extends ConfigManager {
 
 
     public void recordPullTPS() {
+    	/**
+    	 * chen.si 统计任务 周期性 的 调用此方法，打印 消费的 tps
+    	 */
         ConcurrentHashMap<String, ConcurrentHashMap<Integer, Long>> snapshotNow =
                 cloneOffsetTable(this.offsetTable);
         this.offsetTableLastLast = this.offsetTableLast;
@@ -151,6 +176,9 @@ public class ConsumerOffsetManager extends ConfigManager {
     public void commitOffset(final String group, final String topic, final int queueId, final long offset) {
         // topic@group
         String key = topic + TOPIC_GROUP_SEPARATOR + group;
+        /**
+         * chen.si 更新 consumer group 对  topic和queue分区 的 消费进度
+         */
         this.commitOffset(key, queueId, offset);
     }
 
@@ -158,6 +186,9 @@ public class ConsumerOffsetManager extends ConfigManager {
     public long queryOffset(final String group, final String topic, final int queueId) {
         // topic@group
         String key = topic + TOPIC_GROUP_SEPARATOR + group;
+        /**
+         * chen.si 根据consumer group、topic 和 queueId来查询 offset
+         */
         ConcurrentHashMap<Integer, Long> map = this.offsetTable.get(key);
         if (null != map) {
             Long offset = map.get(queueId);
@@ -183,6 +214,9 @@ public class ConsumerOffsetManager extends ConfigManager {
 
 
     public String encode() {
+    	/**
+    	 * chen.si 序列化为字符串，便于持久化到文件
+    	 */
         return this.encode(false);
     }
 
@@ -194,6 +228,9 @@ public class ConsumerOffsetManager extends ConfigManager {
 
     @Override
     public void decode(String jsonString) {
+    	/**
+    	 * chen.si 字符串反序列化为 offset结构
+    	 */
         if (jsonString != null) {
             ConsumerOffsetManager obj =
                     RemotingSerializable.fromJson(jsonString, ConsumerOffsetManager.class);
@@ -206,6 +243,9 @@ public class ConsumerOffsetManager extends ConfigManager {
 
     @Override
     public String configFilePath() {
+    	/**
+    	 * chen.si 消费offset的文件存储路径
+    	 */
         return this.brokerController.getBrokerConfig().getConsumerOffsetPath();
     }
 

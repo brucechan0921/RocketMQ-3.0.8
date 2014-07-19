@@ -72,6 +72,9 @@ public class Broker2Client {
             final CheckTransactionStateRequestHeader requestHeader,//
             final SelectMapedBufferResult selectMapedBufferResult//
     ) {
+    	/**
+    	 * chen.si 构造事务状态回查的请求
+    	 */
         RemotingCommand request =
                 RemotingCommand.createRequestCommand(MQRequestCode.CHECK_TRANSACTION_STATE_VALUE,
                     requestHeader);
