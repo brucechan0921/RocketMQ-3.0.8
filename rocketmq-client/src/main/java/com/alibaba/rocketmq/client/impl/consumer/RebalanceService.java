@@ -25,6 +25,9 @@ import com.alibaba.rocketmq.common.ServiceThread;
 /**
  * Rebalance服务
  * 
+ * <br/>
+ * chen.si 主要负责对每个consumer group，定期检查 group包含的 活动consumer 是否有变化，以及时更新 consumer处理的分区队列
+ * 
  * @author shijia.wxr<vintage.wang@gmail.com>
  * @since 2013-7-24
  */

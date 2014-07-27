@@ -945,6 +945,9 @@ public class MQClientFactory {
 
 
     public void rebalanceImmediately() {
+    	/*
+    	 * chen.si 让本地的reblance服务立刻唤醒，以开始检查 是否需要因为consumer的变化 而更新 处理队列
+    	 */
         this.rebalanceService.wakeup();
     }
 

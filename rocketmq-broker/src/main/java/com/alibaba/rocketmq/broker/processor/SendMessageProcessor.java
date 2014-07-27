@@ -84,11 +84,20 @@ public class SendMessageProcessor implements NettyRequestProcessor {
         MQRequestCode code = MQRequestCode.valueOf(request.getCode());
         switch (code) {
         case SEND_MESSAGE:
-        	/**
+        	/*
         	 * chen.si 消息发送事件，包括 普通消息、事务消息prepare/commit/rollback、定时消息
         	 */
             return this.sendMessage(ctx, request);
         case CONSUMER_SEND_MSG_BACK:
+        	/*
+        	 * chen.si consumer消息处理失败，直接发回给 消息所在的 broker
+        	 *
+        	 * 参考MQConsumer.sendMessageBack注释：
+        	 * Consumer消费失败的消息可以选择重新发回到服务器端，并延时消费
+        	 * 会首先尝试将消息发回到消息之前存储的主机，此时只传送消息Offset，消息体不传送，不会占用网络带宽
+        	 * 如果发送失败，会自动重试发往其他主机，此时消息体也会传送
+        	 * 重传回去的消息只会被当前Consumer Group消费。
+        	 */
             return this.consumerSendMsgBack(ctx, request);
         default:
             break;
@@ -104,6 +113,10 @@ public class SendMessageProcessor implements NettyRequestProcessor {
                 (ConsumerSendMsgBackRequestHeader) request
                     .decodeCommandCustomHeader(ConsumerSendMsgBackRequestHeader.class);
 
+        /*
+         * chen.si 为每个consumer group建立 重试分区队列，其中topic为%RETRY + consumerGroupName
+         * 			因为一种consumer group处理消息失败， 只能放在自己专属的重试队列里，不能影响 其他的consumer group
+         */
         // 确保订阅组存在
         SubscriptionGroupConfig subscriptionGroupConfig =
                 this.brokerController.getSubscriptionGroupManager().findSubscriptionGroupConfig(
@@ -115,6 +128,9 @@ public class SendMessageProcessor implements NettyRequestProcessor {
             return response;
         }
 
+        /*
+         * chen.si 此消息不需要重试的意思
+         */
         // 如果重试队列数目为0，则直接丢弃消息
         if (subscriptionGroupConfig.getRetryQueueNums() <= 0) {
             response.setCode(ResponseCode.SUCCESS_VALUE);
@@ -122,10 +138,19 @@ public class SendMessageProcessor implements NettyRequestProcessor {
             return response;
         }
 
+        /*
+         * chen.si 重试的消息，作为特殊的topic：%RETRY% + consumerGroup
+         */
         String newTopic = MixAll.getRetryTopic(requestHeader.getGroup());
+        /*
+         * chen.si 随便扔到一个重试队列里
+         */
         int queueIdInt =
                 Math.abs(this.random.nextInt() % 99999999) % subscriptionGroupConfig.getRetryQueueNums();
 
+        /*
+         * chen.si 重试的topic还没有，创建一个
+         */
         // 检查topic是否存在
         TopicConfig topicConfig =
                 this.brokerController.getTopicConfigManager().createTopicInSendMessageBackMethod(//
@@ -147,6 +172,9 @@ public class SendMessageProcessor implements NettyRequestProcessor {
 
         // 查询消息，这里如果堆积消息过多，会访问磁盘
         // 另外如果频繁调用，是否会引起gc问题，需要关注 TODO
+        /*
+         * chen.si 发回的消息里，只有commit offset，根据commit offset寻找消息
+         */
         MessageExt msgExt =
                 this.brokerController.getMessageStore().lookMessageByOffset(requestHeader.getOffset());
         if (null == msgExt) {
@@ -158,8 +186,14 @@ public class SendMessageProcessor implements NettyRequestProcessor {
         // 构造消息
         final String retryTopic = msgExt.getProperty(MessageConst.PROPERTY_RETRY_TOPIC);
         if (null == retryTopic) {
+        	/*
+        	 * chen.si 保留此消息的原始topic
+        	 */
             msgExt.putProperty(MessageConst.PROPERTY_RETRY_TOPIC, msgExt.getTopic());
         }
+        /*
+         * chen.si 不用等了
+         */
         msgExt.setWaitStoreMsgOK(false);
 
         // 客户端自动决定定时级别
@@ -168,9 +202,19 @@ public class SendMessageProcessor implements NettyRequestProcessor {
         // 死信消息处理
         if (msgExt.getReconsumeTimes() >= subscriptionGroupConfig.getRetryMaxTimes()//
                 || delayLevel < 0) {
+        	/*
+        	 * chen.si 为每个consumer group，创建死信队列，名称为  %DLQ% + consumerGroupName
+        	 * 		这里的死信消息无需处理了，直接扔到 死信topic和队列中 %DLQ%
+        	 */
             newTopic = MixAll.getDLQTopic(requestHeader.getGroup());
+            /*
+             * chen.si 只有1个队列
+             */
             queueIdInt = Math.abs(this.random.nextInt() % 99999999) % DLQ_NUMS_PER_GROUP;
 
+            /*
+             * chen.si 死信topic还没有，创建1个
+             */
             topicConfig =
                     this.brokerController.getTopicConfigManager().createTopicInSendMessageBackMethod(
                         newTopic, //
@@ -184,13 +228,22 @@ public class SendMessageProcessor implements NettyRequestProcessor {
         }
         // 继续重试
         else {
+        	/*
+        	 * chen.si 说明还可以重试，用定时消息 的方式 来重试
+        	 */
             if (0 == delayLevel) {
                 delayLevel = 3 + msgExt.getReconsumeTimes();
             }
 
+            /*
+             * chen.si 消息的延迟级别是通过 properties 的 键值 来存储的，直接设置这个
+             */
             msgExt.setDelayTimeLevel(delayLevel);
         }
 
+        /*
+         * chen.si 重新存储消息，commit log中 以及 定时队列中
+         */
         MessageExtBrokerInner msgInner = new MessageExtBrokerInner();
         msgInner.setTopic(newTopic);
         msgInner.setBody(msgExt.getBody());
@@ -305,7 +358,10 @@ public class SendMessageProcessor implements NettyRequestProcessor {
             // 尝试看下是否是失败消息发回
             if (null == topicConfig) {
             	/**
-            	 * chen.si TODO 需要看下这里的RETRY具体工作流程，先贴一个topics.json：
+            	 * chen.si 如果有失败需要重试的消息，正常情况下会发回给 之前消息发出的broker。 但是如果原有的broker失败，则会自动调整到其他的可用broker。
+            	 * 		   因为是重试的消息，所以消息的topic为 %RETRY%xxTopic 的模式。但是是以send发方式发的，而不是sendback
+            	 * 
+            	 * TODO 需要看下这里的RETRY具体工作流程，先贴一个topics.json：
             	 * 
             	 * "%RETRY%benchmark_consumer":{
                         "perm":6,
@@ -316,6 +372,9 @@ public class SendMessageProcessor implements NettyRequestProcessor {
                 },
             	 */
                 if (requestHeader.getTopic().startsWith(MixAll.RETRY_GROUP_TOPIC_PREFIX)) {
+                	/**
+                	 * chen.si 同是创建topic，但是这里是因为 消息消费失败而引起的sendback，只有1个read/write队列
+                	 */
                     topicConfig =
                             this.brokerController.getTopicConfigManager().createTopicInSendMessageBackMethod(
                                 requestHeader.getTopic(), 1, PermName.PERM_WRITE | PermName.PERM_READ);

@@ -32,6 +32,13 @@ import com.alibaba.rocketmq.common.message.MessageQueue;
 public class AllocateMessageQueueAveragely implements AllocateMessageQueueStrategy {
     @Override
     public List<MessageQueue> allocate(String currentCID, List<MessageQueue> mqAll, List<String> cidAll) {
+    	/*
+    	 * chen.si 参数很重要，这里把接口的方法参数 引用到这里：
+    	 * 			currentCID  当前ConsumerId
+    	 * 			mqAll 		当前Topic的所有队列集合，无重复数据，且有序
+    	 * 			cidAll 		当前订阅组的所有Consumer集合，无重复数据，且有序
+    	 * 			return 		分配结果，无重复数据
+    	 */
         if (currentCID == null || currentCID.length() < 1) {
             throw new IllegalArgumentException("currentCID is empty");
         }

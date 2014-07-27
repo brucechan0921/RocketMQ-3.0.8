@@ -368,9 +368,12 @@ public class DefaultMessageStore implements MessageStore {
         return systemClock;
     }
 
-
     public GetMessageResult getMessage(final String topic, final int queueId, final long offset,
             final int maxMsgNums, final SubscriptionData subscriptionData) {
+    	
+    	/**
+    	 * chen.si 传入的offset  为  分区的逻辑offset，表明从 这个offset 开始 寻找消息
+    	 */
         if (this.shutdown) {
             log.warn("message store has shutdown, so getMessage is forbidden");
             return null;
@@ -395,28 +398,52 @@ public class DefaultMessageStore implements MessageStore {
 
         GetMessageResult getResult = new GetMessageResult();
 
+        /**
+         * chen.si 根据topic和queueId，找到对应 逻辑分区队列
+         */
         ConsumeQueue consumeQueue = findConsumeQueue(topic, queueId);
         if (consumeQueue != null) {
+        	/**
+        	 * chen.si 获取分区的第1个消息的逻辑offset 和  最后一个消息的逻辑offset
+        	 */
             minOffset = consumeQueue.getMinOffsetInQuque();
             maxOffset = consumeQueue.getMaxOffsetInQuque();
 
+            /**
+             * chen.si 
+             */
             if (maxOffset == 0) {
+            	/**
+            	 * chen.si 分区中暂时无消息
+            	 */
                 status = GetMessageStatus.NO_MESSAGE_IN_QUEUE;
                 nextBeginOffset = 0;
             }
             else if (offset < minOffset) {
+            	/**
+            	 * chen.si 传入的offset太小了
+            	 */
                 status = GetMessageStatus.OFFSET_TOO_SMALL;
                 nextBeginOffset = minOffset;
             }
             else if (offset == maxOffset) {
+            	/**
+            	 * chen.si 传入的offset太大了
+            	 */
                 status = GetMessageStatus.OFFSET_OVERFLOW_ONE;
                 nextBeginOffset = offset;
             }
             else if (offset > maxOffset) {
+            	/**
+            	 * chen.si 传入的offset太大了
+            	 */
                 status = GetMessageStatus.OFFSET_OVERFLOW_BADLY;
                 nextBeginOffset = maxOffset;
             }
             else {
+            	/**
+            	 * chen.si 获取 传入的offset开始 到 本文件最后一个消息 的 缓冲区
+            	 */
                 SelectMapedBufferResult bufferConsumeQueue = consumeQueue.getIndexBuffer(offset);
                 if (bufferConsumeQueue != null) {
                     try {
@@ -427,48 +454,78 @@ public class DefaultMessageStore implements MessageStore {
 
                         int i = 0;
                         final int MaxFilterMessageCount = 16000;
+                        /**
+                         * chen.si 遍历之前缓冲区中的逻辑消息：20字节1个消息
+                         */
                         for (; i < bufferConsumeQueue.getSize() && i < MaxFilterMessageCount; i +=
                                 ConsumeQueue.CQStoreUnitSize) {
+                        	/**
+                        	 * chen.si 逻辑分区消息的3个字段
+                        	 */
                             long offsetPy = bufferConsumeQueue.getByteBuffer().getLong();
                             int sizePy = bufferConsumeQueue.getByteBuffer().getInt();
                             long tagsCode = bufferConsumeQueue.getByteBuffer().getLong();
 
                             maxPhyOffsetPulling = offsetPy;
 
+                            /**
+                             * chen.si 说明文件被删除了，这里记录了下一个可用的文件起始offset。 所以可能需要跳过
+                             */
                             // 说明物理文件正在被删除
                             if (nextPhyFileStartOffset != Long.MIN_VALUE) {
                                 if (offsetPy < nextPhyFileStartOffset)
                                     continue;
                             }
 
+                            /**
+                             * chen.si TODO 再看看
+                             */
                             // 此批消息达到上限了
                             if (this.isTheBatchFull(offsetPy, sizePy, maxMsgNums,
                                 getResult.getBufferTotalSize(), getResult.getMessageCount())) {
                                 break;
                             }
 
+                            /**
+                             * chen.si 当前消息的tag，是否符合当前consumer group的过滤规则
+                             */
                             // 消息过滤
                             if (this.messageFilter.isMessageMatched(subscriptionData, tagsCode)) {
+                            	/**
+                            	 * chen.si 获取具体的物理消息
+                            	 */
                                 SelectMapedBufferResult selectResult =
                                         this.commitLog.getMessage(offsetPy, sizePy);
                                 if (selectResult != null) {
                                     this.storeStatsService.getGetMessageTransferedMsgCount()
                                         .incrementAndGet();
+                                    /**
+                                     * chen.si 找到 可用 的物理消息
+                                     */
                                     getResult.addMessage(selectResult);
                                     status = GetMessageStatus.FOUND;
                                     nextPhyFileStartOffset = Long.MIN_VALUE;
                                 }
                                 else {
+                                	/**
+                                	 * chen.si 物理消息被删除了，并且到现在还未找到合适的消息
+                                	 */
                                     if (getResult.getBufferTotalSize() == 0) {
                                         status = GetMessageStatus.MESSAGE_WAS_REMOVING;
                                     }
 
-                                    // chensi： commitlog被删除掉了，所以cq中的offset有问题，自动跳到下一个文件的起始offset
+                                    /**
+                                     * chen.si commitlog被删除掉了，所以cq中的offset有问题，自动跳到下一个文件的起始offset
+                                     *         只要cq中 在 commit log中找不到消息，即认为文件被删除，立刻跳到下一个文件
+                                     */
                                     // 物理文件正在被删除，尝试跳过
                                     nextPhyFileStartOffset = this.commitLog.rollNextFile(offsetPy);
                                 }
                             }
                             else {
+                            	/**
+                            	 * chen.si 消息的tag不符合要求
+                            	 */
                                 if (getResult.getBufferTotalSize() == 0) {
                                     status = GetMessageStatus.NO_MATCHED_MESSAGE;
                                 }
@@ -480,15 +537,24 @@ public class DefaultMessageStore implements MessageStore {
                             }
                         }
 
-                        // chensi：指示出  下一次取数据的offset
+                        // chen.si 指示出  下一次取数据的offset，无论什么情况，都必须更新offset，指示consumer下一次的pull位置
                         nextBeginOffset = offset + (i / ConsumeQueue.CQStoreUnitSize);
 
-                        // chensi:根据cq的未处理字节数， 以及  物理内存的系数结果  来比对出，是否要让slave来处理
-                        // chensi:topic的consume offset也会同步？
+                        /*
+                         * chen.si 根据cq的未处理字节数， 以及  物理内存的系数结果  来比对出，是否要让slave来处理
+                         * 
+                         * 这里有个bug，已提交：https://github.com/alibaba/RocketMQ/issues/480
+                         */
                         long diff = maxOffset - maxPhyOffsetPulling;
                         long memory =
                                 (long) (StoreUtil.TotalPhysicalMemorySize * (this.messageStoreConfig
                                     .getAccessMessageInMemoryMaxRatio() / 100.0));
+                        /**
+                         * chen.si TODO 如果转向slave，因为携带了netxtOffset，所以消息进度不会出现问题，不会出现重复消费的情况。
+                         * 
+                         * 		        但是如果slave上消费产生的进度变化 如何体现？ slave上的消费进度会从master上同步过来覆盖的。
+                         *         另外，如果此时有同一个consumer group连上master，是不是消费同一个队列？
+                         */
                         getResult.setSuggestPullingFromSlave(diff > memory);
                     }
                     finally {
@@ -838,6 +904,9 @@ public class DefaultMessageStore implements MessageStore {
     private boolean isTheBatchFull(long offsetPy, int sizePy, int maxMsgNums, int bufferTotal,
             int messageTotal) {
         long maxOffsetPy = this.commitLog.getMaxOffset();
+        /**
+         * chen.si 最大内存
+         */
         long memory =
                 (long) (StoreUtil.TotalPhysicalMemorySize * (this.messageStoreConfig
                     .getAccessMessageInMemoryMaxRatio() / 100.0));
@@ -847,10 +916,16 @@ public class DefaultMessageStore implements MessageStore {
             return false;
         }
 
+        /**
+         * chen.si 消息数达到最大
+         */
         if ((messageTotal + 1) >= maxMsgNums) {
             return true;
         }
 
+        /**
+         * chen.si 磁盘中的消息字节数   大于  内存
+         */
         // 消息在磁盘
         if ((maxOffsetPy - offsetPy) > memory) {
             if ((bufferTotal + sizePy) > this.messageStoreConfig.getMaxTransferBytesOnMessageInDisk()) {

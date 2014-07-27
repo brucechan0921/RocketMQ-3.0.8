@@ -18,11 +18,17 @@ package com.alibaba.rocketmq.example.simple;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import com.alibaba.rocketmq.client.consumer.DefaultMQPullConsumer;
 import com.alibaba.rocketmq.client.consumer.MessageQueueListener;
 import com.alibaba.rocketmq.client.consumer.PullResult;
 import com.alibaba.rocketmq.client.exception.MQClientException;
+import com.alibaba.rocketmq.common.MixAll;
 import com.alibaba.rocketmq.common.message.MessageExt;
 import com.alibaba.rocketmq.common.message.MessageQueue;
 import com.alibaba.rocketmq.common.protocol.heartbeat.MessageModel;
@@ -31,79 +37,45 @@ import com.alibaba.rocketmq.common.protocol.heartbeat.MessageModel;
  * PullConsumer，订阅消息
  */
 public class ComplexPullConsumer {
-	private static final Map<MessageQueue, Long> offseTable = new HashMap<MessageQueue, Long>();
 
-	public static void main(String[] args) throws MQClientException {
-		DefaultMQPullConsumer consumer = new DefaultMQPullConsumer("chensiPullConGroup");
-
+	public static void main(String[] args) throws MQClientException, InterruptedException {
+		final String consumerGroup = "testPullConGroup";
+		DefaultMQPullConsumer consumer = new DefaultMQPullConsumer(consumerGroup);
+		//设置为集群模式
 		consumer.setMessageModel(MessageModel.CLUSTERING);
+		
+		/*
+		 * TODO 这个还不行，直接使用wait/notify 可能会导致 错过notify
+		 */
+		final Object balanceChanged = new Object(); 
 		
         MessageQueueListener listener = new MessageQueueListener() {
             @Override
             public void messageQueueChanged(String topic, Set<MessageQueue> mqAll, Set<MessageQueue> mqDivided) {
+            	/*
+            	 * chen.si 根据queue的变化，通知consumer的fetch queue，重新pull
+            	 */
                 System.out.println("Topic=" + topic);
                 System.out.println("mqAll:" + mqAll);
                 System.out.println("mqDivided:" + mqDivided);
+                
+                balanceChanged.notifyAll();
             }
         };
-        consumer.registerMessageQueueListener("chensiTopic", listener);
+        final String topic = "testTopic";
+		final String retryTopic = MixAll.getRetryTopic(consumerGroup);
+
+        consumer.registerMessageQueueListener(topic, listener);
+        consumer.registerMessageQueueListener(retryTopic, listener);
         
 		consumer.start();
 
-		Set<MessageQueue> mqs = consumer.fetchSubscribeMessageQueues("chensiTopic");
-		
-		for (MessageQueue mq : mqs) {
-		
-			System.out.println("Consume from the queue: " + mq);
-			
-			try {
-				PullResult pullResult = consumer.pullBlockIfNotFound(mq, null, getMessageQueueOffset(consumer, mq, true), 32);
-				System.out.println(pullResult);
-				
-				putMessageQueueOffset(consumer, mq, pullResult.getNextBeginOffset());
+		ExecutorService consumerService = Executors.newCachedThreadPool();
+		consumerService.submit(new ScheduleTopicTask(consumer, topic, Executors.newCachedThreadPool(), balanceChanged));
+		consumerService.submit(new ScheduleTopicTask(consumer, retryTopic, Executors.newCachedThreadPool(), balanceChanged));
 
-				switch (pullResult.getPullStatus()) {
-				case FOUND:
-					for (MessageExt mex : pullResult.getMsgFoundList()) {
-						System.out.println(mex);
-					}
-					break;
-				case NO_MATCHED_MSG:
-					break;
-				case NO_NEW_MSG:
-					break;
-				case OFFSET_ILLEGAL:
-					break;
-				default:
-					break;
-				}
-			} catch (Exception e) {
-				e.printStackTrace();
-			}
-		}
-
+		Thread.sleep(Long.MAX_VALUE);
+		
 		consumer.shutdown();
 	}
-
-	private static void putMessageQueueOffset(DefaultMQPullConsumer consumer, MessageQueue mq, long offset) throws MQClientException {
-		// offseTable.put(mq, offset);
-		consumer.updateConsumeOffset(mq, offset);
-
-	}
-
-	private static long getMessageQueueOffset(DefaultMQPullConsumer consumer,
-			MessageQueue mq, boolean fromStore) throws MQClientException {
-		long offset = consumer.fetchConsumeOffset(mq, fromStore);
-		offset = (offset < 0 ? 0 : offset);
-		System.out.println("offset:" + offset);
-		return offset;
-	}
-
-	/*
-	 * private static long getMessageQueueOffset(MessageQueue mq) { Long offset
-	 * = offseTable.get(mq); if (offset != null) return offset;
-	 * 
-	 * return 0; }
-	 */
-
 }

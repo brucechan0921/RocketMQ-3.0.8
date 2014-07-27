@@ -21,13 +21,20 @@ package com.alibaba.rocketmq.common.sysflag;
  * @author shijia.wxr<vintage.wang@gmail.com>
  */
 public class PullSysFlag {
-    private final static int FLAG_COMMIT_OFFSET = 0x1 << 0;
-    private final static int FLAG_SUSPEND = 0x1 << 1;
-    private final static int FLAG_SUBSCRIPTION = 0x1 << 2;
+    private final static int FLAG_COMMIT_OFFSET = 0x1 << 0;/*chen.si*//*0000 0001*/
+    private final static int FLAG_SUSPEND = 0x1 << 1;	   /*chen.si*//*0000 0010*/
+    private final static int FLAG_SUBSCRIPTION = 0x1 << 2; /*chen.si*//*0000 0100*/
 
 
     public static int buildSysFlag(final boolean commitOffset, final boolean suspend,
             final boolean subscription) {
+    	/**
+    	 * chen.is 构造pull 的 sysflag，基本的位操作
+    	 * 
+    	 *     	flag = commitOffset ? flag | FLAG_COMMIT_OFFSET : flag;
+    	 *		flag = suspend 		? flag | FLAG_SUSPEND 		: flag;
+    	 *		flag = subscription ? flag | FLAG_SUBSCRIPTION 	: flag;
+    	 */
         int flag = 0;
 
         if (commitOffset) {

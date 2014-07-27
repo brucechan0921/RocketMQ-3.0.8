@@ -697,7 +697,7 @@ public class ConsumeQueue {
 
 
     /**
-     * chen.si 暂时未知，后续补充
+     * chen.si 跳过 逻辑索引index 对应的文件，跳转到下一个文件，返回下一个文件的起始offset
      * 
      * @param index
      * @return

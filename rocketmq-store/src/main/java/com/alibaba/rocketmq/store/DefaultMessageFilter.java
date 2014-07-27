@@ -36,6 +36,9 @@ public class DefaultMessageFilter implements MessageFilter {
             return true;
         }
 
+        /**
+         * chen.si 根据consumer group的 tag list，来执行过滤规则
+         */
         return subscriptionData.getCodeSet().contains((int) tagsCode);
     }
 

@@ -80,6 +80,9 @@ public class PullMessageProcessor implements NettyRequestProcessor {
             @Override
             public void run() {
                 try {
+                	/*
+                	 * chen.si 此次不会再挂起了，一定会返回
+                	 */
                     final RemotingCommand response =
                             PullMessageProcessor.this.processRequest(channel, request, false);
 
@@ -113,18 +116,27 @@ public class PullMessageProcessor implements NettyRequestProcessor {
             }
         };
 
+        /*
+         * chen.si 避免阻塞 接收producer请求而存储消息 的线程。 扔到线程池中处理
+         */
         this.brokerController.getPullMessageExecutor().submit(run);
     }
 
 
     private RemotingCommand processRequest(final Channel channel, RemotingCommand request,
             boolean brokerAllowSuspend) throws RemotingCommandException {
+    	/**
+    	 * chen.si 收到消息拉取请求
+    	 */
         RemotingCommand response = RemotingCommand.createResponseCommand(PullMessageResponseHeader.class);
         final PullMessageResponseHeader responseHeader =
                 (PullMessageResponseHeader) response.getCustomHeader();
         final PullMessageRequestHeader requestHeader =
                 (PullMessageRequestHeader) request.decodeCommandCustomHeader(PullMessageRequestHeader.class);
 
+        /**
+         * chen.si TODO 需要看一下，这里是什么意思，哪里使用了sendfile system call
+         */
         // 由于使用sendfile，所以必须要设置
         response.setOpaque(request.getOpaque());
 
@@ -140,6 +152,12 @@ public class PullMessageProcessor implements NettyRequestProcessor {
             return response;
         }
 
+        /**
+         * chen.si consumer group相关的信息判断
+         * 
+         * 1. consumer group是否属于 配置的group列表
+         * 2. 如果consumer group不在配置列表中，则根据broker的配置autoCreateSubscriptionGroup=true是否自动创建
+         */
         // 确保订阅组存在
         SubscriptionGroupConfig subscriptionGroupConfig =
                 this.brokerController.getSubscriptionGroupManager().findSubscriptionGroupConfig(
@@ -151,6 +169,9 @@ public class PullMessageProcessor implements NettyRequestProcessor {
             return response;
         }
 
+        /**
+         * chen.si consumer group是否允许消费
+         */
         // 这个订阅组是否可以消费消息
         if (!subscriptionGroupConfig.isConsumeEnable()) {
             response.setCode(MQResponseCode.NO_PERMISSION_VALUE);
@@ -162,6 +183,9 @@ public class PullMessageProcessor implements NettyRequestProcessor {
         final boolean hasCommitOffsetFlag = PullSysFlag.hasCommitOffsetFlag(requestHeader.getSysFlag());
         final boolean hasSubscriptionFlag = PullSysFlag.hasSubscriptionFlag(requestHeader.getSysFlag());
 
+        /**
+         * chen.si 获取无消息的hang时长
+         */
         final long suspendTimeoutMillisLong = hasSuspendFlag ? requestHeader.getSuspendTimeoutMillis() : 0;
 
         // 检查topic是否存在
@@ -197,8 +221,16 @@ public class PullMessageProcessor implements NettyRequestProcessor {
 
         // 订阅关系处理
         SubscriptionData subscriptionData = null;
+        /**
+         * chen.si 需要处理消息tag过滤
+         */
         if (hasSubscriptionFlag) {
             try {
+            	/**
+            	 * chen.si consumer拉取消息，可以指定： 
+            	 * 	1. topic 只获取指定topic的消息
+            	 *  2. tag list 只获取具有指定tag的消息
+            	 */
                 subscriptionData =
                         FilterAPI.buildSubscriptionData(requestHeader.getTopic(),
                             requestHeader.getSubscription());
@@ -355,9 +387,13 @@ public class PullMessageProcessor implements NettyRequestProcessor {
             case MQResponseCode.PULL_NOT_FOUND_VALUE:
                 // 长轮询
                 if (brokerAllowSuspend && hasSuspendFlag) {
+                	/*
+                	 * chen.si 此处认为是长轮询，可以block一段时间
+                	 */
                     PullRequest pullRequest =
                             new PullRequest(request, channel, suspendTimeoutMillisLong, this.brokerController
                                 .getMessageStore().now(), requestHeader.getQueueOffset());
+                    
                     this.brokerController.getPullRequestHoldService().suspendPullRequest(
                         requestHeader.getTopic(), requestHeader.getQueueId(), pullRequest);
                     response = null;
@@ -379,6 +415,9 @@ public class PullMessageProcessor implements NettyRequestProcessor {
 
         // 存储Consumer消费进度
         boolean storeOffsetEnable = brokerAllowSuspend; // 说明是首次调用，相对于长轮询通知
+        /*
+         * chen.si 可以自动提交offset
+         */
         storeOffsetEnable = storeOffsetEnable && hasCommitOffsetFlag; // 说明Consumer设置了标志位
         storeOffsetEnable = storeOffsetEnable // 只有Master支持存储offset
                 && this.brokerController.getMessageStoreConfig().getBrokerRole() != BrokerRole.SLAVE;

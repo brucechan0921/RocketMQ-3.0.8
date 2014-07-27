@@ -88,17 +88,32 @@ public class PullRequestHoldService extends ServiceThread {
 
 
     public void notifyMessageArriving(final String topic, final int queueId, final long offset) {
+    	/*
+    	 * chen.si 构造 topic 和 queueId 的key  
+    	 */
         String key = this.buildKey(topic, queueId);
+        /*
+         * chen.si 找到 当前topic和queueId 的  消息等待队列
+         */
         ManyPullRequest mpr = this.pullRequestTable.get(key);
         if (mpr != null) {
+        	/*
+        	 * chen.si 找到 当前在等待消息 的 consumer channel
+        	 */
             List<PullRequest> requestList = mpr.cloneListAndClear();
             if (requestList != null) {
                 List<PullRequest> replayList = new ArrayList<PullRequest>();
 
                 for (PullRequest request : requestList) {
+                	/*
+                	 * chen.si consumer pull请求的offset 比  此次新存储消息 的offset 小， 说明有 满足条件的消息
+                	 */
                     // 查看是否offset OK
                     if (offset >= request.getPullFromThisOffset()) {
                         try {
+                        	/*
+                        	 * chen.si 获取消息
+                        	 */
                             this.brokerController.getPullMessageProcessor().excuteRequestWhenWakeup(
                                 request.getClientChannel(), request.getRequestCommand());
                         }
@@ -109,10 +124,16 @@ public class PullRequestHoldService extends ServiceThread {
                     }
                     // 尝试取最新Offset
                     else {
+                    	/*
+                    	 * chen.si 再看看 consumer pull的offset 是否 比 分区queue的最大ofset小，如果小， 说明有满足条件的消息了
+                    	 */
                         final long newestOffset =
                                 this.brokerController.getMessageStore().getMaxOffsetInQuque(topic, queueId);
                         if (newestOffset >= request.getPullFromThisOffset()) {
                             try {
+                            	/*
+                            	 * chen.si 获取消息
+                            	 */
                                 this.brokerController.getPullMessageProcessor().excuteRequestWhenWakeup(
                                     request.getClientChannel(), request.getRequestCommand());
                             }
@@ -127,6 +148,9 @@ public class PullRequestHoldService extends ServiceThread {
                     if (System.currentTimeMillis() >= (request.getSuspendTimestamp() + request
                         .getTimeoutMillis())) {
                         try {
+                        	/*
+                        	 * chen.si 说明超时了
+                        	 */
                             this.brokerController.getPullMessageProcessor().excuteRequestWhenWakeup(
                                 request.getClientChannel(), request.getRequestCommand());
                         }
@@ -140,6 +164,9 @@ public class PullRequestHoldService extends ServiceThread {
                     replayList.add(request);
                 }
 
+                /*
+                 * chen.si 未 获取到消息  并且 还未超时，继续等待
+                 */
                 if (!replayList.isEmpty()) {
                     mpr.addPullRequest(replayList);
                 }
@@ -154,6 +181,9 @@ public class PullRequestHoldService extends ServiceThread {
         while (!this.isStoped()) {
             try {
                 this.waitForRunning(1000);
+                /*
+                 * chen.si 检测consumer pull request是否已经超时
+                 */
                 this.checkHoldRequest();
             }
             catch (Exception e) {

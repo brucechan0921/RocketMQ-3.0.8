@@ -16,6 +16,8 @@
 package com.alibaba.rocketmq.common.constant;
 
 /**
+ * chen.si broker的权限控制，基本的位操作
+ * 
  * @author shijia.wxr<vintage.wang@gmail.com>
  */
 public class PermName {
@@ -26,16 +28,25 @@ public class PermName {
 
 
     public static boolean isReadable(final int perm) {
+    	/**
+    	 * chen.si PERM_READ位标记，是否存在
+    	 */
         return (perm & PERM_READ) == PERM_READ;
     }
 
 
     public static boolean isWriteable(final int perm) {
+    	/**
+    	 * chen.si PERM_WRITE位标记，是否存在
+    	 */
         return (perm & PERM_WRITE) == PERM_WRITE;
     }
 
 
     public static boolean isInherited(final int perm) {
+    	/**
+    	 * chen.si PERM_INHERIT位标记，是否存在。 这个位的意义是： 如果有继承的权限，则可以通过 此实体（比如 topic）创建 新的实体，新实体的权限继承自 原实体，但取消 继承 权限
+    	 */
         return (perm & PERM_INHERIT) == PERM_INHERIT;
     }
 

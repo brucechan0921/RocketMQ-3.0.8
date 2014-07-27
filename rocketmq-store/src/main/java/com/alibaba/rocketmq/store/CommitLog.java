@@ -145,6 +145,7 @@ public class CommitLog {
 
     /**
      * chen.si 找到当前offset对应的下一个文件，返回下一个文件的起始offset
+     * 			注意：这里的下一个文件的起始offset可能仍然是不可用的
      * @param offset
      * @return
      */

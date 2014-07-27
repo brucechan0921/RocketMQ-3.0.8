@@ -247,6 +247,9 @@ public abstract class RebalanceImpl {
     public void doRebalance() {
         Map<String, SubscriptionData> subTable = this.getSubscriptionInner();
         if (subTable != null) {
+        	/*
+        	 * chen.si 针对每个topic，检查当前consumer group中的 活动consumer list是否有变化，如果变化了，需要重新调整 分区 
+        	 */
             for (final Map.Entry<String, SubscriptionData> entry : subTable.entrySet()) {
                 final String topic = entry.getKey();
                 try {
@@ -285,7 +288,13 @@ public abstract class RebalanceImpl {
             break;
         }
         case CLUSTERING: {
+        	/*
+        	 * chen.si topic下的所有的分区队列
+        	 */
             Set<MessageQueue> mqSet = this.topicSubscribeInfoTable.get(topic);
+            /*
+             * chen.si 一个consumer，会有一个唯一的clientId。这里通过clientId来标识 同一个consumer group下的当前活动的所有consumer。
+             */
             List<String> cidAll = this.mQClientFactory.findConsumerIdList(topic, consumerGroup);
             if (null == mqSet) {
                 if (!topic.startsWith(MixAll.RETRY_GROUP_TOPIC_PREFIX)) {
@@ -327,6 +336,9 @@ public abstract class RebalanceImpl {
                     log.info("rebalanced result changed. mqSet={}, ConsumerId={}, mqSize={}, cidSize={}",
                         allocateResult, this.mQClientFactory.getClientId(), mqAll.size(), cidAll.size());
 
+                    /*
+                     * chen.si 当前consumer负责的分区队列有变化，需要通知consumer。 当前consumer需要重新调整fetch
+                     */
                     this.messageQueueChanged(topic, mqSet, allocateResultSet);
                     log.info("messageQueueChanged {} {} {} {}",//
                         consumerGroup,//
