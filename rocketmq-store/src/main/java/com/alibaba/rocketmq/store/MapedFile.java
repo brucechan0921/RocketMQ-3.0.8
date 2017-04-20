@@ -316,6 +316,18 @@ public class MapedFile extends ReferenceResource {
     }
 
 
+    /**
+     * chen.si 是否满足刷盘的时机策略，包括2个策略
+     * <p>
+     *     1. 文件已经满了
+     * </p>
+     * <p>
+     *     2. 未刷盘的页数达到了设定的刷盘阈值
+     * </p>
+     *
+     * @param flushLeastPages
+     * @return
+     */
     private boolean isAbleToFlush(final int flushLeastPages) {
         int flush = this.committedPosition.get();
         int write = this.wrotePostion.get();
@@ -425,6 +437,8 @@ public class MapedFile extends ReferenceResource {
     public boolean destroy(final long intervalForcibly) {
     	/**
     	 * chen.si shutdown内部会调用cleanup，通过munmap来释放文件的内存映射
+         *
+         * 2017/04/21 这里是将文件直接删除掉，所以内部也不用进行刷盘等
     	 */
         this.shutdown(intervalForcibly);
 

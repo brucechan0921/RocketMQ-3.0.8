@@ -66,6 +66,9 @@ public class SelectMapedBufferResult {
 
     @Override
     protected void finalize() {
+        /*
+        chen.si 确保将mapedFile的ref进行-1操作
+        */
         if (this.mapedFile != null) {
             this.release();
         }
@@ -76,6 +79,7 @@ public class SelectMapedBufferResult {
      * 此方法只能被调用一次，重复调用无效
      */
     public synchronized void release() {
+        /*chen.si 先release，然后将mapedFile设置为null，避免重复调用，并且有synchronized同步*/
         if (this.mapedFile != null) {
             this.mapedFile.release();
             this.mapedFile = null;

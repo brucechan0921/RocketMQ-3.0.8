@@ -156,7 +156,7 @@ public class CommitLog {
 
 
     /**
-     * chen.si 获取commit log的最大的offset，即：队列尾的offset
+     * chen.si 获取commit log的最大的offset，即：队列尾的offset，此offset不指向任何消息，指向下一个待写的位置
      * @return
      */
     public long getMaxOffset() {
@@ -257,13 +257,13 @@ public class CommitLog {
                 /**
                  * chen.si：文件未写完而已，并不是错误。此时直接break，因为这个文件就是最后一个待用文件
                  */
-                else if (size == -1) {
+                else if (size == -1) { //new DispatchRequest(-1)
                     log.info("recover physics file end, " + mapedFile.getFileName());
                     break;
                 }
                 // 走到文件末尾，切换至下一个文件
                 // 由于返回0代表是遇到了最后的空洞，这个可以不计入truncate offset中
-                else if (size == 0) {
+                else if (size == 0) { //new DispatchRequest(0)
                 	/**
                 	 * chen.si：遇到了空洞文件末尾，切换到下一个文件
                 	 */
@@ -454,17 +454,18 @@ public class CommitLog {
             for (; index >= 0; index--) {
                 mapedFile = mapedFiles.get(index);
                 /**
-                 * chen.si 不是恢复所有文件checkpoint
+                 * chen.si 不是恢复所有文件checkpoint。看如下的示意图
+                 * |F1| |F2| |F3|
+                 * checkpoint是一个时间戳，实际上可能会指向任意一个文件的任意位置，一般来说是最后1个文件，因为checkpoint一直在刷盘。
+                 * 具体指向什么，是按照commit log的消息的storeTimestamp来确定的。确定方式，就是比较checkpoint时间戳和File的第1个消息的storeTimestamp
+                 * 如果checkpoint的时间戳 晚于 消息的storeTimestamp，则说明就从这个文件开始恢复，否则继续找前一个文件
+                 *
                  */
                 if (this.isMapedFileMatchedRecover(mapedFile)) {
                 	
                 	// 考虑 store时间戳的误差，所以从上一个文件进行恢复，防止消息丢失
                 	// TODO 最准确的方式是直接找到上一个文件的checkpoint对应的点，然后恢复剩余的消息，避免恢复整个文件。
                 	//      但是commit log需要从头寻找才能确定消息，而且都要走一遍page cache，性能相差基本不大
-                	if(index > 0) {
-                		mapedFile = mapedFiles.get(index - 1);
-                	}
-                	
                     log.info("recover from this maped file " + mapedFile.getFileName());
                     break;
                 }
@@ -479,7 +480,13 @@ public class CommitLog {
             }
 
             ByteBuffer byteBuffer = mapedFile.sliceByteBuffer();
+            /**
+             * chen.si global offset
+             */
             long processOffset = mapedFile.getFileFromOffset();
+            /**
+             * chen.si local offset
+             */
             long mapedFileOffset = 0;
             while (true) {
             	/**
@@ -534,6 +541,18 @@ public class CommitLog {
              * 
              * 这个是以文件为级别的，发现中的第1条消息是多余消息，则删掉整个文件。
              * 如果文件中 开始一部分消息合法，但是 后续消息不合法呢？cq.truncateDirtyLogicFiles方法中没看到处理逻辑，却是直接return的
+             *
+             * 这里并没有覆盖文件后续的内容，而是直接通过write和commit position来截止到这里，实际上可能是不安全的。
+             * 因为假设此时不再有新的消息，但是正常关闭了，则下次cq被恢复时，会直接全部读完。
+             *
+             * TODO 建议这里覆盖掉后面的内容
+             *
+             * 2017/04/13
+             * 实际上这里有一个问题，就是上面的this.defaultMessageStore.putDispatchRequest(dispatchRequest);是异步的
+             * 这里直接truncate，是不正确的，需要等待上述恢复完成，这里才能truncate
+             *
+             * 好在，3.5.8甚至后面的4.0版本，已经全部采用同步的方式
+             *
              */
             this.defaultMessageStore.truncateDirtyLogicFiles(processOffset);
         }
@@ -1195,6 +1214,9 @@ public class CommitLog {
              */
             final int tranType = MessageSysFlag.getTransactionValue(msgInner.getSysFlag());
             switch (tranType) {
+            /**
+             * chen.si prepare消息是新消息，所以需要offset，指向transaction table
+             */
             case MessageSysFlag.TransactionPreparedType:
                 queueOffset =
                         CommitLog.this.defaultMessageStore.getTransactionStateService()

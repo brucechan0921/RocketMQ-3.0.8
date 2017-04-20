@@ -307,11 +307,17 @@ public class DefaultMessageStore implements MessageStore {
 
 
     public PutMessageResult putMessage(MessageExtBrokerInner msg) {
+    	/**
+    	 * chen.si 已经被shutdown，不再接收消息
+    	 */
         if (this.shutdown) {
             log.warn("message store has shutdown, so putMessage is forbidden");
             return new PutMessageResult(PutMessageStatus.SERVICE_NOT_AVAILABLE, null);
         }
 
+        /**
+         * chen.si slave模式下，不能 写 消息
+         */
         if (BrokerRole.SLAVE == this.messageStoreConfig.getBrokerRole()) {
             long value = this.printTimes.getAndIncrement();
             if ((value % 50000) == 0) {
@@ -1049,7 +1055,7 @@ public class DefaultMessageStore implements MessageStore {
             while (this.dispatchMessageService.hasRemainMessage()) {
                 try {
                     Thread.sleep(500);
-                    log.info("waiting dispatching message over");
+                    log.info("waiting dispatching mestrasage over");
                 }
                 catch (InterruptedException e) {
                     e.printStackTrace();
@@ -1057,6 +1063,8 @@ public class DefaultMessageStore implements MessageStore {
             }
         }
 
+        //chen.si commit log的恢复过程，会跳过transaction state table的恢复， 其中的producer group为null，所以跳过了
+        //        所以仍然要从这里开始恢复
         // 恢复事务模块
         this.transactionStateService.recoverStateTable(lastExitOK);
 
@@ -1064,13 +1072,26 @@ public class DefaultMessageStore implements MessageStore {
     }
 
 
+    /**
+     * chen.si: 用于设置所有的consume queue的下一个消息可写slot。
+     *
+     * <p>
+     *     在commit log中存储消息时，需要找到consume queue的下一个位置，就是从这里的topicQueueTable中获取。
+     * </p>
+     */
     private void recoverTopicQueueTable() {
         HashMap<String/* topic-queueid */, Long/* offset */> table = new HashMap<String, Long>(1024);
+        /*
+        一般commit log的minPhyOffset就是第1个有效文件的file offset
+         */
         long minPhyOffset = this.commitLog.getMinOffset();
         for (ConcurrentHashMap<Integer, ConsumeQueue> maps : this.consumeQueueTable.values()) {
             for (ConsumeQueue logic : maps.values()) {
                 // 恢复写入消息时，记录的队列offset
                 String key = logic.getTopic() + "-" + logic.getQueueId();
+                /**
+                 * 这里是按照20字节一个slot来计算的，也就是0/1/2/3/.../N
+                 */
                 table.put(key, logic.getMaxOffsetInQuque());
                 // 恢复每个队列的最小offset
                 logic.correctMinOffset(minPhyOffset);

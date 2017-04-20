@@ -145,6 +145,9 @@ public class BrokerStartup {
                 }
             }
 
+            /**
+             * chen.si 可以在命令行中指定 相关的参数信息
+             */
             MixAll.properties2Object(MixAll.commandLine2Properties(commandLine), brokerConfig);
 
             if (null == brokerConfig.getRocketmqHome()) {

@@ -49,6 +49,9 @@ public class ConsumeQueue {
     private final String storePath;
     private final int mapedFileSize;
     // 最后一个消息对应的物理Offset
+    /**
+     * chen.si: 最后一个逻辑消息对应的物理消息的起始Offset
+     */
     private long maxPhysicOffset = -1;
     // 逻辑队列的最小Offset，删除物理文件时，计算出来的最小Offset
     // 实际使用需要除以 StoreUnitSize
@@ -116,8 +119,11 @@ public class ConsumeQueue {
             long mapedFileOffset = 0;
             while (true) {
                 for (int i = 0; i < mapedFileSizeLogics; i += CQStoreUnitSize) {
+                    // chen.si: 8 bytes for offset
                     long offset = byteBuffer.getLong();
+                    // chen.si: 4 bytes for size
                     int size = byteBuffer.getInt();
+                    // chen.si: 8 bytes for tags code
                     long tagsCode = byteBuffer.getLong();
 
                     // 说明当前存储单元有效
@@ -134,7 +140,9 @@ public class ConsumeQueue {
                     }
                     else {
                     	/**
-                    	 * chen.si 文件到了最后一条消息，结束这个文件
+                    	 * chen.si 文件到了最后一条消息，结束这个文件(有2种结束条件：1. 文件未写满，而结束  2. 文件写满，同时也没有写下一个文件)
+                    	 * 
+                    	 * 这里是第1个条件 ： 1. 文件未写满，而结束
                     	 */
                         log.info("recover current consume queue file over,  " + mapedFile.getFileName() + " "
                                 + offset + " " + size + " " + tagsCode);
@@ -145,12 +153,13 @@ public class ConsumeQueue {
                 /**
                  * chen.si 只能通过local offset 和  文件满期望的 大小 来 判断  文件是否满（commit log有单独的结束标识）
                  * 			说明这个文件是因为文件满才结束的，需要继续恢复下一个文件（如果有的话）
+                 * 
                  */
                 // 走到文件末尾，切换至下一个文件
                 if (mapedFileOffset == mapedFileSizeLogics) {
                     index++;
                     /**
-                     * chen.si 如果只有1个full的文件，还是会走到这段逻辑的吧？
+                     * 这里是第2个条件 ：2. 文件写满，同时也没有写下一个文件
                      */
                     if (index >= mapedFiles.size()) {
                         // 当前条件分支不可能发生
@@ -176,9 +185,14 @@ public class ConsumeQueue {
                 }
             }
 
+            /**
+             * 计算最大的global offset
+             */
             processOffset += mapedFileOffset;
             /**
              * chen.si 为什么没有设置committedWhere？
+             * 
+             * processOffset实际上为最后一个有效消息的结束地址。这个地址之后的文件，都是无效的
              */
             this.mapedFileQueue.truncateDirtyFiles(processOffset);
         }
@@ -314,7 +328,7 @@ public class ConsumeQueue {
      */
     public void truncateDirtyLogicFiles(long phyOffet) {
     	/**
-    	 * chen.si phyOffset是最大commit log offset，基于这个offset，将多余的文件删除掉
+    	 * chen.si phyOffset是最大commit log offset，也就是commit log下一个待写消息的位置，基于这个offset，将多余的文件删除掉
     	 */
         // 逻辑队列每个文件大小
         int logicFileSize = this.mapedFileSize;
@@ -322,10 +336,29 @@ public class ConsumeQueue {
         // 先改变逻辑队列存储的物理Offset
         /**
          * chen.si TODO 暂时不理解这里的目的
+         * 
+         * 再次看了一下，还是无法理解其用意，本身这个值并未在下面的逻辑中读，只有写。
+         * 在任何异常情况下，也还没理解需要-1。
+         *
+         * 2017/04/13
+         * 这里的maxPhysicOffset本质上是用来表示 consume queue中的最后一个逻辑消息对应的物理消息的physical offset
+         *
+         * 而参数传递进来的phyOffset，是commit log的下一个待写的位置，示意图如下：
+         *
+         * |msg1|msg2|msg3|msg4|......
+         *                ^     ^
+         *  maxPhysicOffset是第1个^的offset，指向commit log最后一条消息的起始offset
+         *  phyOffset       是第2个^的offset，指向commit log下一个消息的待写offset
+         *
+         *  maxPhysicOffset指向的是有效的位置；而phyOffset指向的是一个无效的位置（意思是说没有实际的消息数据）
+         *  为了保证maxPhysicOffset语义上的一致性，因此将maxPhysicOffset设置为phyOffset-1，指向最后一条物理消息的末尾
+         *  至少是有效的，指向实际的消息数据。而且后续的恢复中，只要有一个有效消息，立刻就会将maxPhysicOffset设置为指向新的物理消息的起始offset
+         *
          */
         this.maxPhysicOffset = phyOffet - 1;
 
         while (true) {
+        	
             MapedFile mapedFile = this.mapedFileQueue.getLastMapedFile2();
             if (mapedFile != null) {
                 ByteBuffer byteBuffer = mapedFile.sliceByteBuffer();
@@ -572,7 +605,7 @@ public class ConsumeQueue {
     	 * chen.si 这里是恢复的关键点，cq中的消息 有2种情况需要考虑：
     	 * 
     	 * 1. commit log中的物理消息存储成功，对应的cq的消息也存储成功，
-    	 * 2. commit log中的物理消息存储成功，对应的cq的消息 未 存储成功（可能愿意： broker被强制关闭等）
+    	 * 2. commit log中的物理消息存储成功，对应的cq的消息 未 存储成功（可能原因： broker被强制关闭等）
     	 * 
     	 * 对于第1种情况，不需要执行cq的写入操作，所以直接返回
     	 * 对于第2种情况，需要执行cq的写入操作，以 补偿 commit log中 未写入cq 的消息
@@ -588,6 +621,9 @@ public class ConsumeQueue {
     	
     	/**
     	 * chen.si 恢复流程走到这里，说明消息已经在cq存储成功，不需要 恢复写入，直接返回。
+         *
+         * 2017/04/13 异常流程下，根据checkpoint恢复时，会根据这里的物理消息的physicOffset判断，是否在逻辑队列中已经存在
+         *            这里是否存在的判断，完全是根据 offset的大小进行判断的，
     	 * 
     	 * 正常接收消息写入，不会走到里面
     	 */
@@ -619,7 +655,11 @@ public class ConsumeQueue {
 						
 						2.  这里是假设： cq中即将写入的消息偏移（即：第几条消息）  与  当前cq文件的待写入 位置 不匹配
 						
-						所以认为是索引顺序有错误，进行调整，方法为：使用特殊的20字节进行填充文件开始部分，以修改cq文件的待写入位置。这里的前提是： 消息偏移 的 期望位置  比 当前位置 要小。 
+						所以认为是索引顺序有错误，进行调整，方法为：使用特殊的20字节进行填充文件开始部分，以修改cq文件的待写入位置。这里的前提是： 消息偏移 的 期望位置  比 当前位置 要小。
+
+             2017/04/13 这里发现，所谓的调整，实际上并不是针对次序错误的调整。这里的逻辑的一个基础原则就是：只要cq中有文件，就应该是正确的。
+                        唯一需要调整的是，如果cq是空的(可能是过期删除掉的)，则重建cq，而commit log中对应的消息很可能 不是 cq中的第1个消息，
+                        此时则需要在新的cq文件中，直接将消息写到期望的位置，而该位置之前的内容，全部用特殊的填充消息写入
         	 */
             if (mapedFile.isFirstCreateInQueue() && cqOffset != 0 && mapedFile.getWrotePostion() == 0) {
             	/**
@@ -645,6 +685,14 @@ public class ConsumeQueue {
             if (cqOffset != 0) {
             	/**
             	 * chen.si 尽管调整了，但是仍然存在  逻辑队列索引顺序问题。 比如 realLogicOffset滞后。此时只能告警
+                 *
+                 * 2017/04/13 这里其实不是调整，参考之前说的。这里的严重告警是说，发现commit log中记录的queue offset与 实际的consume queue的待写入位置不一致。
+                 *
+                 * 认为是一个严重的bug，原因未明。
+                 *
+                 * 而且后续的处理逻辑，是将错就错，继续将消息写入append到末尾。实际上这里会永远都不一致了。
+                 *
+                 * 2017/04/14
             	 */
                 if (realLogicOffset != (mapedFile.getWrotePostion() + mapedFile.getFileFromOffset())) {
                     log.warn("logic queue order maybe wrong " + realLogicOffset + " "

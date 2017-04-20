@@ -429,6 +429,9 @@ public class SendMessageProcessor implements NettyRequestProcessor {
             queueIdInt = Math.abs(this.random.nextInt() % 99999999) % topicConfig.getWriteQueueNums();
         }
 
+        /**
+         * chen.si 对于多tag，增加一个flag
+         */
         int sysFlag = requestHeader.getSysFlag();
         // 多标签过滤需要置位
         if (TopicFilterType.MULTI_TAG == topicConfig.getTopicFilterType()) {

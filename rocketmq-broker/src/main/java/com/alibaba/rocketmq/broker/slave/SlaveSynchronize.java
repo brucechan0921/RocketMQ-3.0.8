@@ -86,7 +86,7 @@ public class SlaveSynchronize {
                         this.brokerController.getBrokerOuterAPI().getAllTopicConfig(masterAddrBak);
                 
                 /**
-                 * chen.si 比较版本，因为topic一般的在线改动不大，所以增加个 版本，必须重复的同步
+                 * chen.si 比较版本，因为topic一般的在线改动不大，所以增加个 版本，避免重复的同步
                  */
                 if (!this.brokerController.getTopicConfigManager().getDataVersion()
                     .equals(topicWrapper.getDataVersion())) {

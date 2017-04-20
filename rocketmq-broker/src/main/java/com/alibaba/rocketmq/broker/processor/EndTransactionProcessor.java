@@ -164,6 +164,9 @@ public class EndTransactionProcessor implements NettyRequestProcessor {
             }
         }
 
+        /**
+         * chen.si commit/rollback的情况下，会处理
+         */
         final MessageExt msgExt =
                 this.brokerController.getMessageStore().lookMessageByOffset(
                     requestHeader.getCommitLogOffset());
@@ -195,6 +198,9 @@ public class EndTransactionProcessor implements NettyRequestProcessor {
                 requestHeader.getCommitOrRollback()));
 
             msgInner.setQueueOffset(requestHeader.getTranStateTableOffset());
+            /**
+             * che.si 这里是准备commit/rollback事务，所以设置prepared transaction offset，指向之前的prepared消息的offset
+             */
             msgInner.setPreparedTransactionOffset(requestHeader.getCommitLogOffset());
             msgInner.setStoreTimestamp(msgExt.getStoreTimestamp());
             if (MessageSysFlag.TransactionRollbackType == requestHeader.getCommitOrRollback()) {

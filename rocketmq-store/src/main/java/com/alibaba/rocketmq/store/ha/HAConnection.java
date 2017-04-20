@@ -238,6 +238,12 @@ public class HAConnection {
                         // 接收Slave上传的offset
                         /**
                          * chen.si 数据包格式：从Slave接收数据协议 <Phy Offset> 8字节long
+                         *
+                         * 2017/04/18
+                         * 整个数据包的定义和算法的设计，核心就是： salve只会上报8字节的进度。因此这里只需要找到最近的一次8字节数据，
+                         * 就是最新的slave复制进度.
+                         *
+                         * 如果是第1次上报，则这个复制进度就是请求开始复制数据的进度；如果是第2次以及后续，就是进度的ack数据
                          */
                         if ((this.byteBufferRead.position() - this.processPostion) >= 8) {
                         	/**
@@ -346,6 +352,12 @@ public class HAConnection {
                         continue;
                     }
 
+                    /**
+                     * chen.si 2017/04/18
+                     * 本来slave上报的进度，就是复制数据的offset。
+                     * 但是需要修正这个进度，根据当前master的具体offset情况，主要是避免在slave为空的情况，一下子需要复制所有文件。
+                     * 对master的压力太大，因此此时选择只复制最近的一个文件。否则使用slave上上报的offset。
+                     */
                     // 第一次传输，需要计算从哪里开始
                     // Slave如果本地没有数据，请求的Offset为0，那么master则从物理文件最后一个文件开始传送数据
                     if (-1 == this.nextTransferFromWhere) {

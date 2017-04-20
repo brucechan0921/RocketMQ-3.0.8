@@ -171,6 +171,11 @@ public class TransactionStateService {
                                 long timestampLong = timestamp * 1000;
                                 long diff = System.currentTimeMillis() - timestampLong;
                                 if (diff < checkTransactionMessageAtleastInterval) {
+                                	/**
+                                	 * chen.si 这里没法优化，本想记录 当前操作位置，后面继续处理。
+                                	 * 	但是，这里只是发事务确认消息，是oneway的， 可能会确认失败，或者  事务状态unknown
+                                	 * 需要继续重新来查
+                                	 */
                                     break;
                                 }
 
