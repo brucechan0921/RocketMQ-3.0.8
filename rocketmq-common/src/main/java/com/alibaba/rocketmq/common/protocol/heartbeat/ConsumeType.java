@@ -11,10 +11,14 @@ package com.alibaba.rocketmq.common.protocol.heartbeat;
 public enum ConsumeType {
     /**
      * 主动方式消费
+     *
+     * chen.si 对应PULL
      */
     CONSUME_ACTIVELY,
     /**
      * 被动方式消费
+     *
+     * chen.si 对应PUSH
      */
     CONSUME_PASSIVELY,
 }

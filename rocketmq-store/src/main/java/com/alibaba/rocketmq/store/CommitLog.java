@@ -553,6 +553,9 @@ public class CommitLog {
              *
              * 好在，3.5.8甚至后面的4.0版本，已经全部采用同步的方式
              *
+             * 2017/05/08
+             * 在外层才有判断queue中是否有remaining的消息，这时候已经晚了，已经truncate完成了
+             *
              */
             this.defaultMessageStore.truncateDirtyLogicFiles(processOffset);
         }

@@ -153,6 +153,9 @@ public class ConsumerGroupInfo {
         for (SubscriptionData sub : subList) {
             SubscriptionData old = this.subscriptionTable.get(sub.getTopic());
             if (old == null) {
+                /*
+                chen.si 增加了新的订阅关系，比如 订阅了新的topic
+                 */
                 SubscriptionData prev = this.subscriptionTable.put(sub.getTopic(), sub);
                 if (null == prev) {
                     updated = true;
@@ -161,6 +164,9 @@ public class ConsumerGroupInfo {
                 }
             }
             else if (sub.getSubVersion() > old.getSubVersion()) {
+                /*
+                chen.si 更新了订阅关系，比如重新subscribe，更新了tag信息
+                 */
                 if (this.consumeType == ConsumeType.CONSUME_PASSIVELY) {
                     log.info("subscription changed, group: {} OLD: {} NEW: {}", //
                         this.groupName,//

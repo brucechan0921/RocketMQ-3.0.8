@@ -354,6 +354,9 @@ public class ConsumeQueue {
          *  为了保证maxPhysicOffset语义上的一致性，因此将maxPhysicOffset设置为phyOffset-1，指向最后一条物理消息的末尾
          *  至少是有效的，指向实际的消息数据。而且后续的恢复中，只要有一个有效消息，立刻就会将maxPhysicOffset设置为指向新的物理消息的起始offset
          *
+         * 2017/05/08
+         * 这里是一个偷懒的做法，或者说是个无奈的做法。准确来说，应该是找到最后一条物理消息的起始offset。但是因为设计问题，
+         * 导致无法找到最后一条消息的起始offset，只能将就，找到最后一条物理消息的末尾有效字节
          */
         this.maxPhysicOffset = phyOffet - 1;
 

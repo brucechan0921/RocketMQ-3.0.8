@@ -38,7 +38,14 @@ import com.alibaba.rocketmq.remoting.common.RemotingUtil;
 
 /**
  * 管理Producer组及各个Producer连接
- * 
+ *
+ * chen.si
+ *
+ * <p>1. 根据心跳，增加连接</p>
+ * <p>2. 根据心跳，更新连接最近一次活动时间</p>
+ * <p>3. 根据心跳，unregister连接</p>
+ *
+ *
  * @author shijia.wxr<vintage.wang@gmail.com>
  * @since 2013-7-26
  */
@@ -64,6 +71,14 @@ public class ProducerManager {
     }
 
 
+    /**
+     * chen.si 随机根据group的hash，随机选择该group对应的一个producer连接
+     *
+     * 主要用于事务回查功能
+     *
+     * @param producerGroupHashCode
+     * @return
+     */
     public ClientChannelInfo pickProducerChannelRandomly(final int producerGroupHashCode) {
         try {
             if (this.hashcodeChannelLock.tryLock(LockTimeoutMillis, TimeUnit.MILLISECONDS)) {
@@ -107,6 +122,9 @@ public class ProducerManager {
         try {
             if (this.hashcodeChannelLock.tryLock(LockTimeoutMillis, TimeUnit.MILLISECONDS)) {
                 try {
+                    /*
+                    chen.si 扫描连接，判断是否超时，太低效
+                     */
                     Iterator<Entry<Integer, List<ClientChannelInfo>>> it =
                             this.hashcodeChannelTable.entrySet().iterator();
 
@@ -116,11 +134,17 @@ public class ProducerManager {
                         final Integer groupHashCode = entry.getKey();
                         final List<ClientChannelInfo> clientChannelInfoList = entry.getValue();
 
+                        /*
+                        chen.si 遍历连接
+                         */
                         Iterator<ClientChannelInfo> itChannelInfo = clientChannelInfoList.iterator();
                         while (itChannelInfo.hasNext()) {
                             ClientChannelInfo clientChannelInfo = itChannelInfo.next();
                             long diff =
                                     System.currentTimeMillis() - clientChannelInfo.getLastUpdateTimestamp();
+                            /*
+                            chen.si  连接僵死，断开
+                             */
                             if (diff > ChannelExpiredTimeout) {
                                 log.warn(
                                     "SCAN: remove expired channel[{}] from ProducerManager hashcodeChannelTable, producer group hash code: {}",
@@ -130,6 +154,9 @@ public class ProducerManager {
                                 itChannelInfo.remove();
                             }
                         }
+                        /*
+                        chen.si TODO 这里如果clientChannelInfoList为空，并未直接移除，需要fix
+                         */
                     }
                 }
                 finally {
@@ -244,23 +271,41 @@ public class ProducerManager {
     }
 
 
+    /**
+     * chen.si 生产者周期性发送心跳，服务端更新生产者链接信息
+     *
+     * @param group 生产者组
+     * @param clientChannelInfo 生产者链接信息
+     */
     public void registerProducer(final String group, final ClientChannelInfo clientChannelInfo) {
         try {
             ClientChannelInfo clientChannelInfoFound = null;
             if (this.hashcodeChannelLock.tryLock(LockTimeoutMillis, TimeUnit.MILLISECONDS)) {
                 try {
+                    /*
+                    chen.si 增加链接的数据结构，producer group name的hashcode作为key
+
+                    这个group name对应的producer链路形成一个list，作为value
+                     */
                     List<ClientChannelInfo> clientChannelInfoList =
                             this.hashcodeChannelTable.get(group.hashCode());
                     if (null == clientChannelInfoList) {
+
                         clientChannelInfoList = new ArrayList<ClientChannelInfo>();
                         this.hashcodeChannelTable.put(group.hashCode(), clientChannelInfoList);
                     }
 
+                    /*
+                    chen.si 判断当前链路是否已经存在
+                     */
                     int index = clientChannelInfoList.indexOf(clientChannelInfo);
                     if (index >= 0) {
                         clientChannelInfoFound = clientChannelInfoList.get(index);
                     }
 
+                    /*
+                    * chen.si 新的连接，增加
+                    * */
                     if (null == clientChannelInfoFound) {
                         clientChannelInfoList.add(clientChannelInfo);
                     }
@@ -269,6 +314,9 @@ public class ProducerManager {
                     this.hashcodeChannelLock.unlock();
                 }
 
+                /*
+                chen.si 更新连接的最近活动时间，避免僵死连接
+                 */
                 if (clientChannelInfoFound != null) {
                     clientChannelInfoFound.setLastUpdateTimestamp(System.currentTimeMillis());
                 }
@@ -282,6 +330,9 @@ public class ProducerManager {
         }
 
         try {
+            /*
+            chen.si 按照group name增加连接信息
+             */
             ClientChannelInfo clientChannelInfoFound = null;
 
             if (this.groupChannelLock.tryLock(LockTimeoutMillis, TimeUnit.MILLISECONDS)) {
@@ -292,9 +343,15 @@ public class ProducerManager {
                         this.groupChannelTable.put(group, channelTable);
                     }
 
+                    /*
+                    chen.si 增加连接信息
+                     */
                     clientChannelInfoFound = channelTable.get(clientChannelInfo.getChannel());
                     if (null == clientChannelInfoFound) {
                         channelTable.put(clientChannelInfo.getChannel(), clientChannelInfo);
+                        /*
+                        chen.si 不要调用toString
+                         */
                         log.info("new producer connected, group: {} channel: {}", group,
                             clientChannelInfo.toString());
                     }
@@ -321,9 +378,15 @@ public class ProducerManager {
         try {
             if (this.hashcodeChannelLock.tryLock(LockTimeoutMillis, TimeUnit.MILLISECONDS)) {
                 try {
+                    /*
+                    chen.si 从group name的hash结构中，删除连接
+                     */
                     List<ClientChannelInfo> clientChannelInfoList =
                             this.hashcodeChannelTable.get(group.hashCode());
                     if (null != clientChannelInfoList && !clientChannelInfoList.isEmpty()) {
+                        /*
+                        chen.si 遍历list，然后删除连接
+                         */
                         boolean result = clientChannelInfoList.remove(clientChannelInfo);
                         if (result) {
                             log.info("unregister a producer[{}] from hashcodeChannelTable {}", group,
@@ -353,12 +416,21 @@ public class ProducerManager {
                 try {
                     HashMap<Channel, ClientChannelInfo> channelTable = this.groupChannelTable.get(group);
                     if (null != channelTable && !channelTable.isEmpty()) {
+                        /*
+                        chen.si 移除channel
+                         */
                         ClientChannelInfo old = channelTable.remove(clientChannelInfo.getChannel());
                         if (old != null) {
+                            /*
+                            chen.si 不要调用toString
+                             */
                             log.info("unregister a producer[{}] from groupChannelTable {}", group,
                                 clientChannelInfo.toString());
                         }
 
+                        /*
+                        chen.si 移除key和value
+                         */
                         if (channelTable.isEmpty()) {
                             this.hashcodeChannelTable.remove(group.hashCode());
                             log.info("unregister a producer group[{}] from groupChannelTable", group);

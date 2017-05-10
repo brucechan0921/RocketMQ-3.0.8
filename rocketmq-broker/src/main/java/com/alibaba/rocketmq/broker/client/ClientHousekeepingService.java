@@ -32,7 +32,14 @@ import com.alibaba.rocketmq.remoting.ChannelEventListener;
 
 /**
  * 定期检测客户端连接，清除不活动的连接
- * 
+ *
+ * chen.si broker用来管理 producer和consumer 的连接，包括
+
+ * <p>1. 定期检测，判断连接是否为僵死连接，以将连接关闭</p>
+ * <p>2. 接入netty，处理连接关闭/空闲/异常的事件，以将连接关闭</p>
+ *
+ * 实际上这里并未找到连接IDLE的事件，需要钻研下netty
+ *
  * @author shijia.wxr<vintage.wang@gmail.com>
  * @since 2013-7-26
  */

@@ -85,6 +85,15 @@ public class ConsumerManager {
     public boolean registerConsumer(final String group, final ClientChannelInfo clientChannelInfo,
             ConsumeType consumeType, MessageModel messageModel, ConsumeFromWhere consumeFromWhere,
             final Set<SubscriptionData> subList) {
+        /*
+        chen.si 记录 订阅组的信息,订阅组包括：
+        1. 消费组组名
+        2. 订阅的主题和tags
+        3. 消费类型（就是指消费者是以PUSH还是PULL的方式获取消息）
+        4. 消费模型（广播/集群）
+        5. 从哪里开始消费
+
+         */
         ConsumerGroupInfo consumerGroupInfo = this.consumerTable.get(group);
         if (null == consumerGroupInfo) {
             ConsumerGroupInfo tmp = new ConsumerGroupInfo(group, consumeType, messageModel, consumeFromWhere);
@@ -92,12 +101,26 @@ public class ConsumerManager {
             consumerGroupInfo = prev != null ? prev : tmp;
         }
 
+        /*
+        chen.si 如果是新的连接，则说明有新的consumer来了，更新到 消费组 里面
+         */
         boolean r1 =
                 consumerGroupInfo.updateChannel(clientChannelInfo, consumeType, messageModel,
                     consumeFromWhere);
+
+        /*
+        chen.si 订阅关系发生了变化
+         */
         boolean r2 = consumerGroupInfo.updateSubscription(subList);
 
         if (r1 || r2) {
+            /*
+            chen.si 通知消费组对应的所有消费者，需要重新进行负载均衡
+
+            2017/05/10 这里存在一个问题，如果通知给消费者失败，怎么办？
+
+            没有问题，消费端会周期性拉取订阅信息，进行本地更新。在这个更新周期内，可能会有消息重复。
+             */
             this.consumerIdsChangeListener.consumerIdsChanged(group, consumerGroupInfo.getAllChannel());
         }
 
